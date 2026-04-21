@@ -98,7 +98,7 @@ class DataArguments:
     cn_image_root: Optional[str] = field(default=None)
     max_num_patches: int = 0
     caption_loss_weight: float = field(default=0.0)
-    pretrain_caption_decoder: bool = field(default=False)
+    detach_caption_decoder: bool = field(default=False)
 
 
     
@@ -137,6 +137,7 @@ class TrainingArguments(transformers.TrainingArguments):
     lora_bias: str = "none"
     train_use_word_size: int = 8
     text_model_lr: Optional[float] = None
+    caption_decoder_lr: Optional[float] = None
     from_siglip2: bool = field(default=False)
     cn_and_en_2_train: bool = field(default=False)
     naflex_train: bool = field(default=False)
@@ -577,16 +578,8 @@ def train():
     model.world_size = training_args.train_use_word_size
     model.loss_type = model_args.loss_type
     model.caption_loss_weight = data_args.caption_loss_weight
-    model.pretrain_caption_decoder = data_args.pretrain_caption_decoder
-    if data_args.pretrain_caption_decoder:
-        for name, param in model.named_parameters():
-            if 'caption_decoder' not in name:
-                param.requires_grad_(False)
-        trainable = [n for n, p in model.named_parameters() if p.requires_grad]
-        frozen = [n for n, p in model.named_parameters() if not p.requires_grad]
-        print(f"[DEBUG] pretrain_caption_decoder: frozen {len(frozen)} param groups, trainable {len(trainable)} param groups")
-        print(f"[DEBUG] trainable params: {trainable}")
-        print(f"[DEBUG] pretrain_caption_decoder: frozen vision/text encoder, only training CaptionDecoder")
+    model.detach_caption_decoder = data_args.detach_caption_decoder
+    print(f"[DEBUG] caption_loss_weight={data_args.caption_loss_weight}, detach_caption_decoder={data_args.detach_caption_decoder}")
 
     data_module = make_supervised_data_module(data_args=data_args,img_preprocess=image_processor,tokenizer=tokenizer,is_naflex=training_args.naflex_train)
     

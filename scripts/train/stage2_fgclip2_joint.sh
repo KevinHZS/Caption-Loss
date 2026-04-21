@@ -2,8 +2,6 @@ export NCCL_IB_GID_INDEX=5
 
 INIT_MODEL_PATH="/hbox2dir"
 
-
-
 name="siglip2-base-patch16-naflex"
 
 en_data_path="en_pairs/"
@@ -11,11 +9,14 @@ en_img_root="en_images"
 cn_root="cn_pairs/"
 cn_img_root="cn_images"
 
+# 指向 pretrain_decoder 阶段的 checkpoint
+PRETRAIN_DECODER_CHECKPOINT="./checkpoints/pretrain_decoder/checkpoint-XXXX"
+
 
 deepspeed fgclip2/train/train.py \
     --deepspeed ./scripts/zero2.json \
     --base_model $INIT_MODEL_PATH/$name \
-    --model_name_or_path $INIT_MODEL_PATH/$name \
+    --model_name_or_path $PRETRAIN_DECODER_CHECKPOINT \
     --data_path $en_data_path \
     --cn_and_en_2_train True \
     --loss_type reduce \
@@ -25,7 +26,7 @@ deepspeed fgclip2/train/train.py \
     --image_folder $en_img_root \
     --cn_pair_root $cn_root \
     --cn_image_root $cn_img_root \
-    --output_dir ./checkpoints/tests2 \
+    --output_dir ./checkpoints/joint_finetune \
     --train_use_word_size 8 \
     --add_box_loss True \
     --use_hard_neg True \
@@ -55,3 +56,4 @@ deepspeed fgclip2/train/train.py \
     --dataloader_pin_memory True \
     --lazy_preprocess True \
     --report_to "none" \
+    --caption_loss_weight 2.0 \

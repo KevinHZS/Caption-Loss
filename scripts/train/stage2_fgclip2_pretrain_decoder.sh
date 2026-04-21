@@ -39,7 +39,8 @@ deepspeed fgclip2/train/train.py \
     --save_strategy "steps" \
     --save_steps 2000 \
     --save_total_limit 10 \
-    --learning_rate 1e-4 \
+    --learning_rate 1e-5 \
+    --caption_decoder_lr 1e-4 \
     --weight_decay 0.001 \
     --adam_beta1 0.9 \
     --adam_beta2 0.98 \
@@ -54,4 +55,4 @@ deepspeed fgclip2/train/train.py \
     --lazy_preprocess True \
     --report_to "none" \
     --caption_loss_weight 1.0 \
-    --pretrain_caption_decoder True \
+    --detach_caption_decoder True \

@@ -96,7 +96,7 @@ class FG_CLIP2_Model(Fgclip2Model):
         self.world_size = 0
         self.loss_type = None
         self.caption_loss_weight = 0.0
-        self.pretrain_caption_decoder = False
+        self.detach_caption_decoder = False
 
         
         # Initialize weights and apply final processing
@@ -471,27 +471,6 @@ class FG_CLIP2_Model(Fgclip2Model):
 
 
 
-        if self.pretrain_caption_decoder:
-            print(f"[DEBUG] pretrain_caption_decoder mode activated")
-            assert text_long is not None, "pretrain_caption_decoder requires text_long"
-            assert caption_labels is not None, "pretrain_caption_decoder requires caption_labels"
-            print(f"[DEBUG] vision_outputs.last_hidden_state shape: {vision_outputs.last_hidden_state.shape}")
-            print(f"[DEBUG] long_text_outputs.last_hidden_state shape: {long_text_outputs.last_hidden_state.shape}")
-            print(f"[DEBUG] caption_labels shape: {caption_labels.shape}")
-            caption_logits = self.caption_decoder(
-                image_patch_tokens=vision_outputs.last_hidden_state.detach(),
-                text_token_embs=long_text_outputs.last_hidden_state.detach(),
-                pixel_attention_mask=pixel_attention_mask,
-            )
-            print(f"[DEBUG] caption_logits shape: {caption_logits.shape}")
-            loss = F.cross_entropy(
-                caption_logits.reshape(-1, caption_logits.shape[-1]),
-                caption_labels.reshape(-1),
-                ignore_index=1,
-            )
-            print(f"[DEBUG] caption loss: {loss.item():.4f}")
-            return Fgclip2Output(loss=loss)
-
         logit_scale = self.logit_scale.exp()
         logit_bias = self.logit_bias
         if self.loss_type == "gather":
@@ -509,9 +488,12 @@ class FG_CLIP2_Model(Fgclip2Model):
         if text_long is not None:
             loss = loss_long+loss_short
             if self.caption_loss_weight > 0.0 and caption_labels is not None:
+                img_tokens = vision_outputs.last_hidden_state.detach() if self.detach_caption_decoder else vision_outputs.last_hidden_state
+                txt_tokens = long_text_outputs.last_hidden_state.detach() if self.detach_caption_decoder else long_text_outputs.last_hidden_state
+                print(f"[DEBUG] caption decoder detach={self.detach_caption_decoder}, img_tokens shape: {img_tokens.shape}, txt_tokens shape: {txt_tokens.shape}")
                 caption_logits = self.caption_decoder(
-                    image_patch_tokens=vision_outputs.last_hidden_state,
-                    text_token_embs=long_text_outputs.last_hidden_state,
+                    image_patch_tokens=img_tokens,
+                    text_token_embs=txt_tokens,
                     pixel_attention_mask=pixel_attention_mask,
                 )
                 loss_caption = F.cross_entropy(
@@ -519,6 +501,7 @@ class FG_CLIP2_Model(Fgclip2Model):
                     caption_labels.reshape(-1),
                     ignore_index=1,  # pad_token_id=1
                 )
+                print(f"[DEBUG] caption loss: {loss_caption.item():.4f}, weight: {self.caption_loss_weight}")
                 loss = loss + self.caption_loss_weight * loss_caption
         else:
             loss = loss_short

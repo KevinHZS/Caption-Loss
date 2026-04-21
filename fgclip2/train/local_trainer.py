@@ -419,39 +419,52 @@ class CLIPTrainer(Trainer):
             decay_parameters = get_parameter_names(opt_model, ALL_LAYERNORM_LAYERS)
             decay_parameters = [name for name in decay_parameters if "bias" not in name]
 
-            if self.args.text_model_lr is not None:
-                # text_model_parameters = [name for name, _ in opt_model.named_parameters() if "text_model" in name]
+            if self.args.text_model_lr is not None or self.args.caption_decoder_lr is not None:
                 text_model_parameters = [name for name, _ in opt_model.named_parameters() if "dense_feature_head" in name]
-                text_model_parameters += [name for name, _ in opt_model.named_parameters() if "boxtext_head" in name] 
-                text_model_parameters += [name for name, _ in opt_model.named_parameters() if "longtext_head" in name] 
+                text_model_parameters += [name for name, _ in opt_model.named_parameters() if "boxtext_head" in name]
+                text_model_parameters += [name for name, _ in opt_model.named_parameters() if "longtext_head" in name]
+                caption_decoder_parameters = [name for name, _ in opt_model.named_parameters() if "caption_decoder" in name]
+                special_parameters = set(text_model_parameters + caption_decoder_parameters)
                 optimizer_grouped_parameters = [
                     {
                         "params": [
-                            p for n, p in opt_model.named_parameters() if (n in decay_parameters and n not in text_model_parameters and p.requires_grad)
+                            p for n, p in opt_model.named_parameters() if (n in decay_parameters and n not in special_parameters and p.requires_grad)
                         ],
                         "weight_decay": self.args.weight_decay,
                     },
                     {
                         "params": [
-                            p for n, p in opt_model.named_parameters() if (n not in decay_parameters and n not in text_model_parameters and p.requires_grad)
+                            p for n, p in opt_model.named_parameters() if (n not in decay_parameters and n not in special_parameters and p.requires_grad)
                         ],
                         "weight_decay": 0.0,
-                    },
-                    {
-                        "params": [
-                            p for n, p in opt_model.named_parameters() if (n in decay_parameters and n in text_model_parameters and p.requires_grad)
-                        ],
-                        "weight_decay": self.args.weight_decay,
-                        "lr": self.args.text_model_lr,
-                    },
-                    {
-                        "params": [
-                            p for n, p in opt_model.named_parameters() if (n not in decay_parameters and n in text_model_parameters and p.requires_grad)
-                        ],
-                        "weight_decay": 0.0,
-                        "lr": self.args.text_model_lr,
                     },
                 ]
+                if self.args.text_model_lr is not None:
+                    optimizer_grouped_parameters += [
+                        {
+                            "params": [p for n, p in opt_model.named_parameters() if (n in decay_parameters and n in text_model_parameters and p.requires_grad)],
+                            "weight_decay": self.args.weight_decay,
+                            "lr": self.args.text_model_lr,
+                        },
+                        {
+                            "params": [p for n, p in opt_model.named_parameters() if (n not in decay_parameters and n in text_model_parameters and p.requires_grad)],
+                            "weight_decay": 0.0,
+                            "lr": self.args.text_model_lr,
+                        },
+                    ]
+                if self.args.caption_decoder_lr is not None:
+                    optimizer_grouped_parameters += [
+                        {
+                            "params": [p for n, p in opt_model.named_parameters() if (n in decay_parameters and n in caption_decoder_parameters and p.requires_grad)],
+                            "weight_decay": self.args.weight_decay,
+                            "lr": self.args.caption_decoder_lr,
+                        },
+                        {
+                            "params": [p for n, p in opt_model.named_parameters() if (n not in decay_parameters and n in caption_decoder_parameters and p.requires_grad)],
+                            "weight_decay": 0.0,
+                            "lr": self.args.caption_decoder_lr,
+                        },
+                    ]
             else:
                 optimizer_grouped_parameters = [
                     {
