@@ -15,7 +15,7 @@ from torch.nn import AvgPool2d
 
 from .modeling_fgclip2 import Fgclip2TextModel,Fgclip2VisionModel,Fgclip2Model,Fgclip2MultiheadAttentionPoolingHead,Fgclip2Output
 from .configuration_fgclip2 import Fgclip2Config, Fgclip2TextConfig, Fgclip2VisionConfig
-from .caption_decoder import CaptionDecoder
+from .caption_decoder import LLMCaptionDecoder
 from torch import nn, einsum
 from einops import rearrange, repeat, reduce
 from einops.layers.torch import Rearrange, Reduce
@@ -82,21 +82,13 @@ class FG_CLIP2_Model(Fgclip2Model):
         self.boxtext_head = nn.Linear(self.embed_dim, self.embed_dim)
         self.dense_feature_head = Fgclip2MultiheadAttentionPoolingHead(vision_config)
 
-        self.caption_decoder = CaptionDecoder(
-            hidden_dim=text_config.hidden_size,
-            num_layers=text_config.num_hidden_layers,
-            num_heads=text_config.num_attention_heads,
-            num_learnable_tokens=196,
-            vocab_size=text_config.vocab_size,
-        )
-
         # Initialize weights and apply final processing
         self.thresholds = 0.0
         self.pad_token_id = 0
         self.world_size = 0
         self.loss_type = None
         self.caption_loss_weight = 0.0
-        self.detach_caption_decoder = False
+        self.llm_caption_decoder = None
 
         
         # Initialize weights and apply final processing
@@ -314,6 +306,8 @@ class FG_CLIP2_Model(Fgclip2Model):
         add_box_loss: bool = False,
         use_hard_neg: bool = False,
         caption_labels: Optional[torch.LongTensor] = None,
+        llm_input_ids: Optional[torch.LongTensor] = None,
+        llm_attention_mask: Optional[torch.Tensor] = None,
     ) -> Union[Tuple, Fgclip2Output]:
 
         # Use CLIP model's config for some fields (if specified) instead of those of vision & text components.
@@ -487,19 +481,19 @@ class FG_CLIP2_Model(Fgclip2Model):
 
         if text_long is not None:
             loss = loss_long+loss_short
-            if self.caption_loss_weight > 0.0 and caption_labels is not None:
-                img_tokens = vision_outputs.last_hidden_state.detach() if self.detach_caption_decoder else vision_outputs.last_hidden_state
-                txt_tokens = long_text_outputs.last_hidden_state.detach() if self.detach_caption_decoder else long_text_outputs.last_hidden_state
-                print(f"[DEBUG] caption decoder detach={self.detach_caption_decoder}, img_tokens shape: {img_tokens.shape}, txt_tokens shape: {txt_tokens.shape}")
-                caption_logits = self.caption_decoder(
-                    image_patch_tokens=img_tokens,
-                    text_token_embs=txt_tokens,
+            if self.caption_loss_weight > 0.0 and self.llm_caption_decoder is not None and caption_labels is not None:
+                N = vision_outputs.last_hidden_state.shape[1]
+                caption_logits = self.llm_caption_decoder(
+                    image_patch_tokens=vision_outputs.last_hidden_state,
                     pixel_attention_mask=pixel_attention_mask,
+                    llm_input_ids=llm_input_ids,
+                    llm_attention_mask=llm_attention_mask,
                 )
+                text_logits = caption_logits[:, N:, :]  # [B, L, vocab_size]
                 loss_caption = F.cross_entropy(
-                    caption_logits.reshape(-1, caption_logits.shape[-1]),
+                    text_logits.reshape(-1, text_logits.shape[-1]),
                     caption_labels.reshape(-1),
-                    ignore_index=1,  # pad_token_id=1
+                    ignore_index=-100,
                 )
                 print(f"[DEBUG] caption loss: {loss_caption.item():.4f}, weight: {self.caption_loss_weight}")
                 loss = loss + self.caption_loss_weight * loss_caption

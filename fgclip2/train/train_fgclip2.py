@@ -98,7 +98,7 @@ class DataArguments:
     cn_image_root: Optional[str] = field(default=None)
     max_num_patches: int = 0
     caption_loss_weight: float = field(default=0.0)
-    detach_caption_decoder: bool = field(default=False)
+    llm_model_path: Optional[str] = field(default=None)
 
 
     
@@ -137,7 +137,6 @@ class TrainingArguments(transformers.TrainingArguments):
     lora_bias: str = "none"
     train_use_word_size: int = 8
     text_model_lr: Optional[float] = None
-    caption_decoder_lr: Optional[float] = None
     from_siglip2: bool = field(default=False)
     cn_and_en_2_train: bool = field(default=False)
     naflex_train: bool = field(default=False)
@@ -173,7 +172,7 @@ class LazySupervisedBboxDataset(Dataset):
 
     def __init__(self, data_path: str,
                  data_args: DataArguments,
-                 img_preprocess=None,tokenizer=None):
+                 img_preprocess=None, tokenizer=None, llm_tokenizer=None):
         super(LazySupervisedBboxDataset, self).__init__()
 
         if data_path.endswith('.json') or data_path.endswith('.jsonl'):
@@ -225,6 +224,7 @@ class LazySupervisedBboxDataset(Dataset):
         self.use_hard_neg = data_args.use_hard_neg
         self.cn_image_root = data_args.cn_image_root
         self.caption_loss_weight = data_args.caption_loss_weight
+        self.llm_tokenizer = llm_tokenizer
 
     def __len__(self):
         return len(self.list_data_dict)
@@ -396,10 +396,23 @@ class LazySupervisedBboxDataset(Dataset):
         data_dict['max_img_token'] = max_img_token
         data_dict['is_cn'] = is_cn
 
-        if self.caption_loss_weight > 0.0:
-            # caption_labels: shifted left from text (which is [BOS, t1, t2, ..., EOS, PAD])
-            caption_labels = torch.cat([text[0, 1:], torch.tensor([1], dtype=text.dtype)])  # [t1, t2, ..., EOS, PAD, PAD]
-            data_dict['caption_labels'] = caption_labels.unsqueeze(0)  # [1, max_seq_length]
+        if self.caption_loss_weight > 0.0 and self.llm_tokenizer is not None:
+            llm_enc = self.llm_tokenizer(
+                caption.lower(),
+                max_length=self.max_length,
+                padding="max_length",
+                truncation=True,
+                return_tensors="pt",
+            )
+            llm_input_ids = llm_enc.input_ids          # [1, L]
+            llm_attention_mask = llm_enc.attention_mask  # [1, L]
+            # labels: shift left, mask pad positions with -100
+            labels = llm_input_ids[0, 1:].clone()
+            labels = torch.cat([labels, torch.tensor([-100], dtype=labels.dtype)])
+            labels[llm_attention_mask[0, 1:] == 0] = -100  # mask pad positions
+            data_dict['llm_input_ids'] = llm_input_ids
+            data_dict['llm_attention_mask'] = llm_attention_mask
+            data_dict['caption_labels'] = labels.unsqueeze(0)  # [1, L]
 
         if self.add_box_loss:
             # data_dict['box_images'] = box_images
@@ -516,20 +529,23 @@ class DataCollatorForSupervisedDataset(object):
 
         if 'caption_labels' in instances[0]:
             batch['caption_labels'] = torch.cat([instance['caption_labels'] for instance in instances], dim=0)
+            batch['llm_input_ids'] = torch.cat([instance['llm_input_ids'] for instance in instances], dim=0)
+            batch['llm_attention_mask'] = torch.cat([instance['llm_attention_mask'] for instance in instances], dim=0)
 
         return batch
 
 
 
 
-def make_supervised_data_module(data_args,img_preprocess,tokenizer,is_naflex) -> Dict:
+def make_supervised_data_module(data_args, img_preprocess, tokenizer, llm_tokenizer=None, is_naflex=False) -> Dict:
     """Make dataset and collator for supervised fine-tuning."""
-    
 
     train_dataset = LazySupervisedBboxDataset(
                                 data_path=data_args.data_path,
                                 data_args=data_args,
-                                img_preprocess=img_preprocess,tokenizer=tokenizer,)
+                                img_preprocess=img_preprocess,
+                                tokenizer=tokenizer,
+                                llm_tokenizer=llm_tokenizer,)
             
     data_collator = DataCollatorForSupervisedDataset(preprocess=img_preprocess,is_naflex=is_naflex)
     return dict(train_dataset=train_dataset,
@@ -578,10 +594,22 @@ def train():
     model.world_size = training_args.train_use_word_size
     model.loss_type = model_args.loss_type
     model.caption_loss_weight = data_args.caption_loss_weight
-    model.detach_caption_decoder = data_args.detach_caption_decoder
-    print(f"[DEBUG] caption_loss_weight={data_args.caption_loss_weight}, detach_caption_decoder={data_args.detach_caption_decoder}")
 
-    data_module = make_supervised_data_module(data_args=data_args,img_preprocess=image_processor,tokenizer=tokenizer,is_naflex=training_args.naflex_train)
+    llm_tokenizer = None
+    if data_args.llm_model_path is not None and data_args.caption_loss_weight > 0.0:
+        from fgclip2.model.strcs.caption_decoder import LLMCaptionDecoder
+        llm_caption_decoder = LLMCaptionDecoder(
+            vis_hidden_dim=model.config.vision_config.hidden_size,
+            llm_model_path=data_args.llm_model_path,
+        )
+        model.llm_caption_decoder = llm_caption_decoder
+        llm_tokenizer = AutoTokenizer.from_pretrained(data_args.llm_model_path)
+        if llm_tokenizer.pad_token is None:
+            llm_tokenizer.pad_token = llm_tokenizer.eos_token
+        print(f"[DEBUG] LLMCaptionDecoder loaded from {data_args.llm_model_path}")
+    print(f"[DEBUG] caption_loss_weight={data_args.caption_loss_weight}, llm_model_path={data_args.llm_model_path}")
+
+    data_module = make_supervised_data_module(data_args=data_args, img_preprocess=image_processor, tokenizer=tokenizer, llm_tokenizer=llm_tokenizer, is_naflex=training_args.naflex_train)
     
     model.to(dtype=compute_dtype, device=training_args.device)
 

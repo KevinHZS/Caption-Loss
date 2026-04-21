@@ -1,6 +1,7 @@
 export NCCL_IB_GID_INDEX=5
 
 INIT_MODEL_PATH="/hbox2dir"
+LLM_MODEL_PATH="/path/to/local/llm"
 
 name="siglip2-base-patch16-naflex"
 
@@ -57,3 +58,4 @@ deepspeed fgclip2/train/train.py \
     --lazy_preprocess True \
     --report_to "none" \
     --caption_loss_weight 2.0 \
+    --llm_model_path $LLM_MODEL_PATH \
