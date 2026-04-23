@@ -323,18 +323,21 @@ class FG_CLIP2_Model(Fgclip2Model):
             return_dict=return_dict,
         )
 
-        
-        short_text_outputs = self.text_model(
-                input_ids=text_short,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-            )
+        if text_short is None and text_long is None:
+            raise ValueError("At least one of `text_short` or `text_long` must be provided.")
 
-        short_text_embeds = short_text_outputs[1]
-        short_text_embeds = short_text_embeds / short_text_embeds.norm(p=2, dim=-1, keepdim=True)
+        if text_short is not None:
+            short_text_outputs = self.text_model(
+                    input_ids=text_short,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    output_attentions=output_attentions,
+                    output_hidden_states=output_hidden_states,
+                    return_dict=return_dict,
+                )
+
+            short_text_embeds = short_text_outputs[1]
+            short_text_embeds = short_text_embeds / short_text_embeds.norm(p=2, dim=-1, keepdim=True)
 
 
         if text_long is not None:
@@ -461,22 +464,25 @@ class FG_CLIP2_Model(Fgclip2Model):
 
         logit_scale = self.logit_scale.exp()
         logit_bias = self.logit_bias
+        loss = None
         if self.loss_type == "gather":
             if text_long is not None:
                 loss_long = self.all_gather_siglip_loss_(image_embeds,long_text_embeds,logit_scale,logit_bias,rank)
-            loss_short = self.all_gather_siglip_loss_(image_embeds,short_text_embeds,logit_scale,logit_bias,rank)
+                loss = loss_long if loss is None else loss + loss_long
+            if text_short is not None:
+                loss_short = self.all_gather_siglip_loss_(image_embeds,short_text_embeds,logit_scale,logit_bias,rank)
+                loss = loss_short if loss is None else loss + loss_short
         elif self.loss_type == "reduce":
             if text_long is not None:
                 loss_long = self.all_reduce_siglip_loss(image_embeds,long_text_embeds,logit_scale,logit_bias,rank)
-            loss_short = self.all_reduce_siglip_loss(image_embeds,short_text_embeds,logit_scale,logit_bias,rank)
+                loss = loss_long if loss is None else loss + loss_long
+            if text_short is not None:
+                loss_short = self.all_reduce_siglip_loss(image_embeds,short_text_embeds,logit_scale,logit_bias,rank)
+                loss = loss_short if loss is None else loss + loss_short
         else:
             assert self.loss_type is not None
 
-
-        if text_long is not None:
-            loss = loss_long+loss_short
-        else:
-            loss = loss_short
+        if text_long is None:
             return Fgclip2Output(
                 loss=loss,
             )
@@ -691,7 +697,6 @@ class FG_CLIP2_Model(Fgclip2Model):
             )
 
         return loss
-
 
 
 

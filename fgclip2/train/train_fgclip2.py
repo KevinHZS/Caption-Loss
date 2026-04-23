@@ -91,6 +91,10 @@ class DataArguments:
     image_grid_pinpoints: Optional[str] = field(default=None)
     max_seq_length: int = 64*4-60
     base_seq_length: int = 64
+    use_short_caption: bool = field(
+        default=True,
+        metadata={"help": "Whether to train with the short caption image-text loss."},
+    )
     box_image_size: int = 224
     add_box_loss: bool = field(default=False)
     use_hard_neg: bool = field(default=False)
@@ -217,6 +221,7 @@ class LazySupervisedBboxDataset(Dataset):
         self.image_root = data_args.image_folder
         self.max_length = data_args.max_seq_length
         self.base_length = data_args.base_seq_length
+        self.use_short_caption = data_args.use_short_caption
         self.box_image_size = data_args.box_image_size
         self.add_box_loss = data_args.add_box_loss
         self.use_hard_neg = data_args.use_hard_neg
@@ -243,13 +248,20 @@ class LazySupervisedBboxDataset(Dataset):
         item = self.list_data_dict[i]
         caption = item["caption"]
         image_path = item["f_path"]
+        caption_short = None
         
         if "is_cn" not in item.keys():
             is_cn = False
-            caption_short = "a photo of "+item["short_caption"]
+            if self.use_short_caption:
+                if "short_caption" not in item:
+                    raise KeyError("short_caption is required when use_short_caption=True")
+                caption_short = "a photo of "+item["short_caption"]
         else:
             is_cn = True
-            caption_short = item["short_caption"]
+            if self.use_short_caption:
+                if "short_caption" not in item:
+                    raise KeyError("short_caption is required when use_short_caption=True")
+                caption_short = item["short_caption"]
 
 
         if is_cn:
@@ -286,7 +298,10 @@ class LazySupervisedBboxDataset(Dataset):
         max_img_token = torch.tensor([max_img_token])
         
         text =  torch.tensor(self.tokenizer([caption.lower()], max_length=self.max_length, padding="max_length", truncation=True).input_ids, dtype=torch.long)
-        short_text = torch.tensor(self.tokenizer([caption_short.lower()], max_length=self.base_length, padding="max_length", truncation=True).input_ids, dtype=torch.long)        
+        short_text = None
+        if self.use_short_caption:
+            short_text = torch.tensor(self.tokenizer([caption_short.lower()], max_length=self.base_length, padding="max_length", truncation=True).input_ids, dtype=torch.long)
+        tensor_device = text.device
 
 
 
@@ -300,7 +315,7 @@ class LazySupervisedBboxDataset(Dataset):
             else:
                 valid_num = 0
 
-            boxes_template = torch.zeros((total_num, 4), device=short_text.device)
+            boxes_template = torch.zeros((total_num, 4), device=tensor_device)
             width, height = image.size
 
             for i in range(total_num):
@@ -323,12 +338,12 @@ class LazySupervisedBboxDataset(Dataset):
                 top = int(box[1] * height)
                 right = int(box[2] * width)
                 bottom = int(box[3] * height)
-                box_text = torch.tensor(self.tokenizer([box_caption.lower()], max_length=self.base_length, padding="max_length", truncation=True).input_ids, dtype=torch.long, device=short_text.device)        
+                box_text = torch.tensor(self.tokenizer([box_caption.lower()], max_length=self.base_length, padding="max_length", truncation=True).input_ids, dtype=torch.long, device=tensor_device)
                 box_texts.append(box_text)
 
             box_texts = torch.cat(box_texts,dim=0)
 
-            bbox_num = torch.tensor([valid_num], device=short_text.device)
+            bbox_num = torch.tensor([valid_num], device=tensor_device)
 
         if self.use_hard_neg:
             hard_texts = []
@@ -342,7 +357,7 @@ class LazySupervisedBboxDataset(Dataset):
             else:
                 valid_num = 0
 
-            hard_boxes = torch.zeros((total_num, 4), device=short_text.device)
+            hard_boxes = torch.zeros((total_num, 4), device=tensor_device)
             valid_hard = 0
             for i in range(total_num):
                 if i<valid_num:
@@ -359,7 +374,7 @@ class LazySupervisedBboxDataset(Dataset):
                         hard_negs = bbox_data["short_expr_negs"]
                         for key in hard_negs.keys():
                             cur_texts.append(hard_negs[key].lower())
-                        box_text = torch.tensor(self.tokenizer(cur_texts, max_length=self.base_length, padding="max_length", truncation=True).input_ids, dtype=torch.long, device=short_text.device)        
+                        box_text = torch.tensor(self.tokenizer(cur_texts, max_length=self.base_length, padding="max_length", truncation=True).input_ids, dtype=torch.long, device=tensor_device)
                         hard_texts.append(box_text)
 
                         hard_boxes[valid_hard] = box_tensor
@@ -371,7 +386,7 @@ class LazySupervisedBboxDataset(Dataset):
                         bottom = int(box[3] * height)
   
 
-            valid_hard = torch.tensor([valid_hard], device=short_text.device)
+            valid_hard = torch.tensor([valid_hard], device=tensor_device)
    
             if len(hard_texts) > 0:
                 hard_texts = torch.cat(hard_texts,dim=0)
@@ -477,7 +492,10 @@ class DataCollatorForSupervisedDataset(object):
             batch['text_long'] = torch.cat(texts,dim=0)
 
         short_texts = [instance['short_text'] for instance in instances]
-        batch['text_short'] = torch.cat(short_texts,dim=0)
+        if any(short_text is None for short_text in short_texts):
+            batch['text_short'] = None
+        else:
+            batch['text_short'] = torch.cat(short_texts,dim=0)
         
         batch["add_box_loss"] = instances[0]["add_box_loss"]
         batch["use_hard_neg"] = instances[0]["use_hard_neg"]
