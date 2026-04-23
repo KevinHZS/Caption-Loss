@@ -106,6 +106,7 @@ class Fgclip2Output(ModelOutput):
     image_embeds: Optional[torch.FloatTensor] = None
     text_model_output: BaseModelOutputWithPooling = None
     vision_model_output: BaseModelOutputWithPooling = None
+    loss_dict: Optional[dict[str, torch.FloatTensor]] = None
 
     def to_tuple(self) -> tuple[Any]:
         return tuple(

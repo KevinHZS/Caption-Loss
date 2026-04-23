@@ -189,6 +189,7 @@ from transformers.utils.deprecation import deprecate_kwarg
 from transformers.utils.import_utils import requires
 from transformers.utils.quantization_config import QuantizationMethod
 
+from .logging_utils import prepare_loss_metrics_for_logging
 
 DEFAULT_CALLBACKS = [DefaultFlowCallback]
 DEFAULT_PROGRESS_CALLBACK = ProgressCallback
@@ -384,6 +385,10 @@ class BilingualSampler(Sampler):
 
 
 class CLIPTrainer(Trainer):
+    def __init__(self, *args, **kwargs):
+        self._extra_loss_logs = {}
+        self._extra_loss_log_counts = {}
+        super().__init__(*args, **kwargs)
 
     def _get_train_sampler(self, train_dataset: Optional[Dataset] = None) -> Optional[torch.utils.data.Sampler]:
         if train_dataset is None:
@@ -402,6 +407,31 @@ class CLIPTrainer(Trainer):
             )
         else:
             return super()._get_train_sampler(train_dataset)
+
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        loss, outputs = super().compute_loss(
+            model,
+            inputs,
+            return_outputs=True,
+            num_items_in_batch=num_items_in_batch,
+        )
+
+        if model.training and hasattr(outputs, "loss_dict"):
+            for name, value in prepare_loss_metrics_for_logging(outputs.loss_dict).items():
+                self._extra_loss_logs[name] = self._extra_loss_logs.get(name, 0.0) + value
+                self._extra_loss_log_counts[name] = self._extra_loss_log_counts.get(name, 0) + 1
+
+        return (loss, outputs) if return_outputs else loss
+
+    def log(self, logs: Dict[str, float], start_time: Optional[float] = None) -> None:
+        merged_logs = dict(logs)
+        for name, total in self._extra_loss_logs.items():
+            count = self._extra_loss_log_counts.get(name, 0)
+            if count > 0:
+                merged_logs[name] = total / count
+        self._extra_loss_logs = {}
+        self._extra_loss_log_counts = {}
+        super().log(merged_logs, start_time=start_time)
 
     def create_optimizer(self):
         """

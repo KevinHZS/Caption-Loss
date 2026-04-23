@@ -4,6 +4,10 @@ set -o pipefail
 export NCCL_IB_GID_INDEX=5
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export PYTHONPATH=/gemini/space/zyf/FG-CLIP:$PYTHONPATH
+export WANDB_PROJECT="fgclip-stage1-caption"
+export WANDB_MODE="offline"
+export WANDB_WATCH="false"
+export WANDB_LOG_MODEL="false"
 
 # INIT_MODEL_PATH="/hbox2dir"
 LLM_MODEL_PATH="/gemini/space/zyf/models/Qwen/Qwen3-1.7B"
@@ -19,6 +23,7 @@ IMG_ROOT="${IMG_ROOT:-$DATA_ROOT/data}"
 LOG_DIR="$ROOT/output/stage1_siglip2_bs256_so_zero2_longonly_2M_cleaned"
 USE_SHORT_CAPTION="${USE_SHORT_CAPTION:-False}"
 MAX_IMAGE_PIXELS="${MAX_IMAGE_PIXELS:-50000000}"
+RUN_NAME="${RUN_NAME:-stage1_siglip2_caption_longonly_2M_cleaned_bs256_lr1e-6_proj1e-5_cap1.0_short${USE_SHORT_CAPTION}_$(date +%Y%m%d_%H%M%S)}"
 
 mkdir -p "$LOG_DIR"
 mkdir -p "$DATA_WORK_DIR"
@@ -33,6 +38,9 @@ echo "ROOT=$ROOT"
 echo "LOG_DIR=$LOG_DIR"
 echo "USE_SHORT_CAPTION=$USE_SHORT_CAPTION"
 echo "MAX_IMAGE_PIXELS=$MAX_IMAGE_PIXELS"
+echo "WANDB_PROJECT=$WANDB_PROJECT"
+echo "WANDB_MODE=$WANDB_MODE"
+echo "RUN_NAME=$RUN_NAME"
 
 printf "%s\n%s\n" "$DENSE_SOURCE" "$PT_SAMPLE_PATH" > "$DATA_PATH"
 echo "Manifest:"
@@ -98,7 +106,8 @@ deepspeed fgclip2/train/train.py \
     --dataloader_num_workers 8 \
     --dataloader_pin_memory True \
     --lazy_preprocess True \
-    --report_to "none" \
+    --report_to "wandb" \
+    --run_name "$RUN_NAME" \
     --caption_loss_weight 1.0 \
     --llm_model_path $LLM_MODEL_PATH \
     --llm_gradient_checkpointing True \

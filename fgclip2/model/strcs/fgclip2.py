@@ -471,16 +471,20 @@ class FG_CLIP2_Model(Fgclip2Model):
 
         logit_scale = self.logit_scale.exp()
         logit_bias = self.logit_bias
+        loss_long = None
+        loss_short = None
+        loss_caption = None
+        loss_bbox_itcl = None
+        loss_bbox_rcc = None
+        loss_bbox_hitc = None
         if self.loss_type == "gather":
             if text_long is not None:
                 loss_long = self.all_gather_siglip_loss_(image_embeds,long_text_embeds,logit_scale,logit_bias,rank)
-            loss_short = None
             if short_text_embeds is not None:
                 loss_short = self.all_gather_siglip_loss_(image_embeds,short_text_embeds,logit_scale,logit_bias,rank)
         elif self.loss_type == "reduce":
             if text_long is not None:
                 loss_long = self.all_reduce_siglip_loss(image_embeds,long_text_embeds,logit_scale,logit_bias,rank)
-            loss_short = None
             if short_text_embeds is not None:
                 loss_short = self.all_reduce_siglip_loss(image_embeds,short_text_embeds,logit_scale,logit_bias,rank)
         else:
@@ -503,14 +507,14 @@ class FG_CLIP2_Model(Fgclip2Model):
                     caption_labels.reshape(-1),
                     ignore_index=-100,
                 )
-                print(f"[DEBUG] long loss: {loss_long.item():.4f}, weight: 1")
-                print(f"[DEBUG] short loss: {loss_short.item():.4f}, weight: 1")
-                print(f"[DEBUG] caption loss: {loss_caption.item():.4f}, weight: {self.caption_loss_weight}")
                 loss = loss + self.caption_loss_weight * loss_caption
         else:
             loss = combine_available_losses(loss_short, None)
             return Fgclip2Output(
                 loss=loss,
+                loss_dict={
+                    "loss_short": loss_short,
+                },
             )
 
 
@@ -566,6 +570,14 @@ class FG_CLIP2_Model(Fgclip2Model):
 
         return Fgclip2Output(
             loss=loss,
+            loss_dict={
+                "loss_caption": loss_caption,
+                "loss_long": loss_long,
+                "loss_short": loss_short,
+                "loss_bbox_itcl": loss_bbox_itcl,
+                "loss_bbox_rcc": loss_bbox_rcc,
+                "loss_bbox_hitc": loss_bbox_hitc,
+            },
         )
 
 
@@ -723,5 +735,4 @@ class FG_CLIP2_Model(Fgclip2Model):
             )
 
         return loss
-
 
