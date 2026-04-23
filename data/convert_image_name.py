@@ -62,7 +62,7 @@ def main(args):
     global num_subfolders_per_parent
 
     url2key_json_root = args.url2key_json
-    url2prekey = []
+    url2prekey = {}
 
     for filename in os.listdir(url2key_json_root):
         url2key_json_name_full = os.path.join(url2key_json_root, filename)
@@ -70,7 +70,11 @@ def main(args):
         with open(url2key_json_name_full, 'r', encoding='utf-8') as file:
             url2key = json.load(file)
 
-        url2prekey += url2key
+        if not isinstance(url2key, dict):
+            print(f"Skip {filename}: expected dict, got {type(url2key)}")
+            continue
+
+        url2prekey.update(url2key)
 
     down_file_root = args.down_file_root
     resave_file_root = args.resave_file_root
