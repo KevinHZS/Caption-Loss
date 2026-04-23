@@ -22,7 +22,7 @@ class LLMCaptionDecoder(nn.Module):
             nn.Linear(llm_hidden_dim, llm_hidden_dim),
         )
 
-        self.llm = AutoModelForCausalLM.from_pretrained(llm_model_path, torch_dtype=torch.bfloat16)
+        self.llm = AutoModelForCausalLM.from_pretrained(llm_model_path, dtype=torch.bfloat16)
         for param in self.llm.parameters():
             param.requires_grad_(False)
 
