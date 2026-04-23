@@ -138,6 +138,7 @@ class TrainingArguments(transformers.TrainingArguments):
     lora_bias: str = "none"
     train_use_word_size: int = 8
     text_model_lr: Optional[float] = None
+    projector_lr: Optional[float] = None
     from_siglip2: bool = field(default=False)
     cn_and_en_2_train: bool = field(default=False)
     naflex_train: bool = field(default=False)

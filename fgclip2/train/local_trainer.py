@@ -419,24 +419,35 @@ class CLIPTrainer(Trainer):
             decay_parameters = get_parameter_names(opt_model, ALL_LAYERNORM_LAYERS)
             decay_parameters = [name for name in decay_parameters if "bias" not in name]
 
+            text_model_parameters = set()
             if self.args.text_model_lr is not None:
-                text_model_parameters = [name for name, _ in opt_model.named_parameters() if "dense_feature_head" in name]
-                text_model_parameters += [name for name, _ in opt_model.named_parameters() if "boxtext_head" in name]
-                text_model_parameters += [name for name, _ in opt_model.named_parameters() if "longtext_head" in name]
-                special_parameters = set(text_model_parameters)
-                optimizer_grouped_parameters = [
-                    {
-                        "params": [
-                            p for n, p in opt_model.named_parameters() if (n in decay_parameters and n not in special_parameters and p.requires_grad)
-                        ],
-                        "weight_decay": self.args.weight_decay,
-                    },
-                    {
-                        "params": [
-                            p for n, p in opt_model.named_parameters() if (n not in decay_parameters and n not in special_parameters and p.requires_grad)
-                        ],
-                        "weight_decay": 0.0,
-                    },
+                text_model_parameters = set(
+                    name for name, _ in opt_model.named_parameters()
+                    if any(k in name for k in ("dense_feature_head", "boxtext_head", "longtext_head"))
+                )
+
+            projector_parameters = set()
+            if self.args.projector_lr is not None:
+                projector_parameters = set(
+                    name for name, _ in opt_model.named_parameters()
+                    if "llm_caption_decoder.projector" in name
+                )
+
+            special_parameters = text_model_parameters | projector_parameters
+
+            optimizer_grouped_parameters = [
+                {
+                    "params": [p for n, p in opt_model.named_parameters() if (n in decay_parameters and n not in special_parameters and p.requires_grad)],
+                    "weight_decay": self.args.weight_decay,
+                },
+                {
+                    "params": [p for n, p in opt_model.named_parameters() if (n not in decay_parameters and n not in special_parameters and p.requires_grad)],
+                    "weight_decay": 0.0,
+                },
+            ]
+
+            if self.args.text_model_lr is not None:
+                optimizer_grouped_parameters += [
                     {
                         "params": [p for n, p in opt_model.named_parameters() if (n in decay_parameters and n in text_model_parameters and p.requires_grad)],
                         "weight_decay": self.args.weight_decay,
@@ -448,19 +459,18 @@ class CLIPTrainer(Trainer):
                         "lr": self.args.text_model_lr,
                     },
                 ]
-            else:
-                optimizer_grouped_parameters = [
+
+            if self.args.projector_lr is not None:
+                optimizer_grouped_parameters += [
                     {
-                        "params": [
-                            p for n, p in opt_model.named_parameters() if (n in decay_parameters and p.requires_grad)
-                        ],
+                        "params": [p for n, p in opt_model.named_parameters() if (n in decay_parameters and n in projector_parameters and p.requires_grad)],
                         "weight_decay": self.args.weight_decay,
+                        "lr": self.args.projector_lr,
                     },
                     {
-                        "params": [
-                            p for n, p in opt_model.named_parameters() if (n not in decay_parameters and p.requires_grad)
-                        ],
+                        "params": [p for n, p in opt_model.named_parameters() if (n not in decay_parameters and n in projector_parameters and p.requires_grad)],
                         "weight_decay": 0.0,
+                        "lr": self.args.projector_lr,
                     },
                 ]
 
