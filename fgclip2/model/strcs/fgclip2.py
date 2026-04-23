@@ -17,6 +17,7 @@ from .modeling_fgclip2 import Fgclip2TextModel,Fgclip2VisionModel,Fgclip2Model,F
 from .configuration_fgclip2 import Fgclip2Config, Fgclip2TextConfig, Fgclip2VisionConfig
 from .caption_alignment import get_caption_text_logits
 from .caption_decoder import LLMCaptionDecoder
+from .loss_utils import combine_available_losses
 from torch import nn, einsum
 from einops import rearrange, repeat, reduce
 from einops.layers.torch import Rearrange, Reduce
@@ -331,17 +332,19 @@ class FG_CLIP2_Model(Fgclip2Model):
         )
 
         
-        short_text_outputs = self.text_model(
-                input_ids=text_short,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-            )
+        short_text_embeds = None
+        if text_short is not None:
+            short_text_outputs = self.text_model(
+                    input_ids=text_short,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    output_attentions=output_attentions,
+                    output_hidden_states=output_hidden_states,
+                    return_dict=return_dict,
+                )
 
-        short_text_embeds = short_text_outputs[1]
-        short_text_embeds = short_text_embeds / short_text_embeds.norm(p=2, dim=-1, keepdim=True)
+            short_text_embeds = short_text_outputs[1]
+            short_text_embeds = short_text_embeds / short_text_embeds.norm(p=2, dim=-1, keepdim=True)
 
 
         if text_long is not None:
@@ -471,17 +474,21 @@ class FG_CLIP2_Model(Fgclip2Model):
         if self.loss_type == "gather":
             if text_long is not None:
                 loss_long = self.all_gather_siglip_loss_(image_embeds,long_text_embeds,logit_scale,logit_bias,rank)
-            loss_short = self.all_gather_siglip_loss_(image_embeds,short_text_embeds,logit_scale,logit_bias,rank)
+            loss_short = None
+            if short_text_embeds is not None:
+                loss_short = self.all_gather_siglip_loss_(image_embeds,short_text_embeds,logit_scale,logit_bias,rank)
         elif self.loss_type == "reduce":
             if text_long is not None:
                 loss_long = self.all_reduce_siglip_loss(image_embeds,long_text_embeds,logit_scale,logit_bias,rank)
-            loss_short = self.all_reduce_siglip_loss(image_embeds,short_text_embeds,logit_scale,logit_bias,rank)
+            loss_short = None
+            if short_text_embeds is not None:
+                loss_short = self.all_reduce_siglip_loss(image_embeds,short_text_embeds,logit_scale,logit_bias,rank)
         else:
             assert self.loss_type is not None
 
 
         if text_long is not None:
-            loss = loss_long+loss_short
+            loss = combine_available_losses(loss_short, loss_long)
             if self.caption_loss_weight > 0.0 and self.llm_caption_decoder is not None and caption_labels is not None:
                 N = vision_outputs.last_hidden_state.shape[1]
                 caption_logits = self.llm_caption_decoder(
@@ -501,7 +508,7 @@ class FG_CLIP2_Model(Fgclip2Model):
                 print(f"[DEBUG] caption loss: {loss_caption.item():.4f}, weight: {self.caption_loss_weight}")
                 loss = loss + self.caption_loss_weight * loss_caption
         else:
-            loss = loss_short
+            loss = combine_available_losses(loss_short, None)
             return Fgclip2Output(
                 loss=loss,
             )
@@ -716,6 +723,5 @@ class FG_CLIP2_Model(Fgclip2Model):
             )
 
         return loss
-
 
 
