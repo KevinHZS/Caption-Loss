@@ -15,6 +15,7 @@ from torch.nn import AvgPool2d
 
 from .modeling_fgclip2 import Fgclip2TextModel,Fgclip2VisionModel,Fgclip2Model,Fgclip2MultiheadAttentionPoolingHead,Fgclip2Output
 from .configuration_fgclip2 import Fgclip2Config, Fgclip2TextConfig, Fgclip2VisionConfig
+from .caption_alignment import get_caption_text_logits
 from .caption_decoder import LLMCaptionDecoder
 from torch import nn, einsum
 from einops import rearrange, repeat, reduce
@@ -489,7 +490,7 @@ class FG_CLIP2_Model(Fgclip2Model):
                     llm_input_ids=llm_input_ids,
                     llm_attention_mask=llm_attention_mask,
                 )
-                text_logits = caption_logits[:, N:, :]  # [B, L, vocab_size]
+                text_logits = get_caption_text_logits(caption_logits, N)  # [B, L, vocab_size]
                 loss_caption = F.cross_entropy(
                     text_logits.reshape(-1, text_logits.shape[-1]),
                     caption_labels.reshape(-1),
@@ -713,7 +714,6 @@ class FG_CLIP2_Model(Fgclip2Model):
             )
 
         return loss
-
 
 
 
