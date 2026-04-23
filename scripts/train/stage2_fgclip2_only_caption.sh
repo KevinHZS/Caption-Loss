@@ -42,7 +42,7 @@ deepspeed fgclip2/train/train.py \
     --max_seq_length 196 \
     --save_safetensors True \
     --bf16 True \
-    --per_device_train_batch_size 8 \
+    --per_device_train_batch_size 64 \
     --per_device_eval_batch_size 4 \
     --gradient_accumulation_steps 16 \
     --num_train_epochs 1 \
@@ -64,6 +64,8 @@ deepspeed fgclip2/train/train.py \
     --report_to "none" \
     --caption_loss_weight 1.0 \
     --llm_model_path $LLM_MODEL_PATH \
+    --llm_gradient_checkpointing True \
+    --projector_lr 1e-5 
 
 kill $MON_PID 2>/dev/null
 trap - EXIT
