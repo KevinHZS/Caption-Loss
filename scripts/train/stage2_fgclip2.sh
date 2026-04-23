@@ -1,31 +1,32 @@
 export NCCL_IB_GID_INDEX=5
 
-INIT_MODEL_PATH="/hbox2dir"
+INIT_MODEL_PATH="/gemini/space/gjx/FG-CLIP"
 
 
 
-name="siglip2-base-patch16-naflex"
+name="models--qihoo360--fg-clip2-base"
 
 en_data_path="en_pairs/"
 en_img_root="en_images"
 cn_root="cn_pairs/"
 cn_img_root="cn_images"
 
+data_path="/gemini/space/gjx/FG-CLIP/data/FineHARD/json_files"
+img_root="/gemini/space/gjx/FG-CLIP/data/grit-12m"
+
 
 deepspeed fgclip2/train/train.py \
-    --deepspeed ./scripts/zero2.json \
+    --deepspeed /gemini/space/gjx/FG-CLIP/scripts/zero2.json \
     --base_model $INIT_MODEL_PATH/$name \
     --model_name_or_path $INIT_MODEL_PATH/$name \
     --data_path $en_data_path \
-    --cn_and_en_2_train True \
+    --cn_and_en_2_train False \
     --loss_type reduce \
     --from_siglip2 True \
     --naflex_train True \
     --max_num_patches 1024 \
-    --image_folder $en_img_root \
-    --cn_pair_root $cn_root \
-    --cn_image_root $cn_img_root \
-    --output_dir ./checkpoints/tests2 \
+    --image_folder $img_root \
+    --output_dir /gemini/space/gjx/FG-CLIP/output \
     --train_use_word_size 8 \
     --add_box_loss True \
     --use_hard_neg True \

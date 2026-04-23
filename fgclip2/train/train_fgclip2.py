@@ -6,6 +6,8 @@ import json
 import logging
 import pathlib
 from typing import Dict, Optional, Sequence, List
+from array import array
+from bisect import bisect_right
 
 import torch
 import random
@@ -24,6 +26,7 @@ import copy
 import os
 import json
 import torch
+import re
 from torch.utils.data import Dataset
 from torchvision.datasets.utils import download_url
 from torchvision import transforms
@@ -61,6 +64,7 @@ import gc
 
 
 local_rank = None
+IMAGE_TOKEN_PATTERN = re.compile(r"<image>")
 
 
 def rank0_print(*args):
@@ -100,6 +104,18 @@ class DataArguments:
     use_hard_neg: bool = field(default=False)
     cn_pair_root: Optional[str] = field(default=None)
     cn_image_root: Optional[str] = field(default=None)
+    missing_image_log_path: Optional[str] = field(
+        default=None,
+        metadata={"help": "Path to a jsonl log file for missing or unreadable training images."},
+    )
+    large_image_log_path: Optional[str] = field(
+        default=None,
+        metadata={"help": "Path to a jsonl log file for skipped over-large training images."},
+    )
+    max_image_pixels: int = field(
+        default=50000000,
+        metadata={"help": "Skip images whose width * height exceeds this value. Set 0 to disable."},
+    )
     max_num_patches: int = 0
 
 
@@ -168,6 +184,200 @@ def safe_save_model_for_hf_trainer(trainer: transformers.Trainer,
 import ast
 
 
+class JsonListStore:
+    def __init__(self, data_file: str, max_records: Optional[int] = None):
+        self.data_file = data_file
+        with open(data_file, "r", encoding="utf-8") as f:
+            self.data = json.load(f)
+        if max_records is not None:
+            self.data = self.data[:max_records]
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, index):
+        return self.data[index]
+
+
+class JsonlOffsetStore:
+    def __init__(
+        self,
+        data_file: str,
+        max_records: Optional[int] = None,
+        sample_seed: Optional[int] = None,
+        index_file: Optional[str] = None,
+    ):
+        self.data_file = data_file
+        self.offsets = array("Q")
+        self._fp = None
+        self.index_file = index_file
+
+        if index_file is not None and os.path.exists(index_file):
+            with open(index_file, "rb") as f:
+                self.offsets.fromfile(f, os.path.getsize(index_file) // self.offsets.itemsize)
+            if max_records is not None and len(self.offsets) != max_records:
+                raise ValueError(
+                    f"Index file {index_file} has {len(self.offsets)} records, expected {max_records}."
+                )
+            return
+
+        rng = random.Random(sample_seed) if sample_seed is not None else None
+        record_count = 0
+
+        with open(data_file, "rb") as f:
+            while True:
+                offset = f.tell()
+                line = f.readline()
+                if not line:
+                    break
+                if line.strip():
+                    record_count += 1
+                    if rng is not None and max_records is not None:
+                        if len(self.offsets) < max_records:
+                            self.offsets.append(offset)
+                        else:
+                            sample_idx = rng.randrange(record_count)
+                            if sample_idx < max_records:
+                                self.offsets[sample_idx] = offset
+                    else:
+                        self.offsets.append(offset)
+                    if rng is None and max_records is not None and len(self.offsets) >= max_records:
+                        break
+
+        if sample_seed is not None and max_records is not None:
+            if max_records > record_count:
+                raise ValueError(
+                    f"Cannot sample {max_records} records from {self.data_file}; only {record_count} records found."
+                )
+
+        if index_file is not None:
+            index_dir = os.path.dirname(index_file)
+            if index_dir:
+                os.makedirs(index_dir, exist_ok=True)
+            tmp_index_file = f"{index_file}.tmp.{os.getpid()}"
+            with open(tmp_index_file, "wb") as f:
+                self.offsets.tofile(f)
+            os.replace(tmp_index_file, index_file)
+
+    def __len__(self):
+        return len(self.offsets)
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state["_fp"] = None
+        return state
+
+    def _file(self):
+        if self._fp is None:
+            self._fp = open(self.data_file, "rb")
+        return self._fp
+
+    def __getitem__(self, index):
+        if index < 0:
+            index += len(self.offsets)
+        if index < 0 or index >= len(self.offsets):
+            raise IndexError(index)
+
+        f = self._file()
+        f.seek(self.offsets[index])
+        line = f.readline()
+        return json.loads(line.decode("utf-8"))
+
+
+class ConcatStore:
+    def __init__(self, stores):
+        self.stores = [store for store in stores if len(store) > 0]
+        self.cumulative_sizes = []
+        total = 0
+        for store in self.stores:
+            total += len(store)
+            self.cumulative_sizes.append(total)
+
+    def __len__(self):
+        if not self.cumulative_sizes:
+            return 0
+        return self.cumulative_sizes[-1]
+
+    def __getitem__(self, index):
+        if index < 0:
+            index += len(self)
+        if index < 0 or index >= len(self):
+            raise IndexError(index)
+
+        store_idx = bisect_right(self.cumulative_sizes, index)
+        previous_size = 0 if store_idx == 0 else self.cumulative_sizes[store_idx - 1]
+        return self.stores[store_idx][index - previous_size]
+
+
+def parse_manifest_line(line: str, manifest_dir: str):
+    parts = line.strip().split()
+    if not parts:
+        return None, None, None, None
+
+    data_path = parts[0]
+    max_records = None
+    sample_seed = None
+    index_file = None
+    if len(parts) > 1:
+        max_records = int(parts[1])
+    if len(parts) > 2:
+        sample_seed = int(parts[2])
+    if len(parts) > 3:
+        index_file = parts[3]
+
+    if not os.path.isabs(data_path):
+        data_path = os.path.join(manifest_dir, data_path)
+    if index_file is not None and not os.path.isabs(index_file):
+        index_file = os.path.join(manifest_dir, index_file)
+
+    return data_path, max_records, sample_seed, index_file
+
+
+def build_data_store(
+    data_path: str,
+    max_records: Optional[int] = None,
+    sample_seed: Optional[int] = None,
+    index_file: Optional[str] = None,
+):
+    data_path = os.path.abspath(data_path)
+
+    if data_path.endswith(".jsonl"):
+        return JsonlOffsetStore(
+            data_path,
+            max_records=max_records,
+            sample_seed=sample_seed,
+            index_file=index_file,
+        )
+
+    if data_path.endswith(".json"):
+        return JsonListStore(data_path, max_records=max_records)
+
+    if data_path.endswith(".txt"):
+        stores = []
+        manifest_dir = os.path.dirname(data_path)
+        with open(data_path, "r", encoding="utf-8") as f:
+            for line in f:
+                json_file, json_limit, json_sample_seed, json_index_file = parse_manifest_line(line, manifest_dir)
+                if not json_file:
+                    continue
+                stores.append(
+                    build_data_store(
+                        json_file,
+                        max_records=json_limit,
+                        sample_seed=json_sample_seed,
+                        index_file=json_index_file,
+                    )
+                )
+        return ConcatStore(stores)
+
+    stores = []
+    for json_file in sorted(glob.glob(os.path.join(data_path, "*.json"))):
+        stores.append(JsonListStore(json_file))
+    for jsonl_file in sorted(glob.glob(os.path.join(data_path, "*.jsonl"))):
+        stores.append(JsonlOffsetStore(jsonl_file))
+    return ConcatStore(stores)
+
+
 
 class LazySupervisedBboxDataset(Dataset):
     """Dataset for supervised fine-tuning."""
@@ -177,43 +387,21 @@ class LazySupervisedBboxDataset(Dataset):
                  img_preprocess=None,tokenizer=None):
         super(LazySupervisedBboxDataset, self).__init__()
 
-        if data_path.endswith('.json') or data_path.endswith('.jsonl'):
-            list_data_dict = json.load(open(data_path, "r", encoding="utf-8"))
-        elif data_path.endswith('.txt'):
-            lines = open(data_path, "r", encoding="utf-8").readlines()
-            list_data_dict = []
-            for line in lines:
-                json_file = line.rstrip()
-                list_data_dict += json.load(open(json_file, "r",encoding="utf-8"))
-        else:
-            json_files = glob.glob(os.path.join(data_path, '*.json'))
-            list_data_dict = []
-            for json_file in json_files:
-                list_data_dict += json.load(open(json_file, "r",encoding="utf-8"))
-
-            jsonl_files = glob.glob(os.path.join(data_path, '*.jsonl'))
-            for jsonl_file in jsonl_files:
-                list_data_dict += json.load(open(jsonl_file, "r",encoding="utf-8"))
-
-
-        self.en_data_length = len(list_data_dict)
+        data_store = build_data_store(data_path)
+        self.en_data_length = len(data_store)
 
         if data_args.cn_pair_root is not None:
-            cn_data_path = data_args.cn_pair_root
-            json_files = glob.glob(os.path.join(cn_data_path, '*.json'))
-            cn_list = []
-            for json_file in json_files:
-                cn_list += json.load(open(json_file, "r",encoding="utf-8"))
-            list_data_dict += cn_list
+            cn_data_store = build_data_store(data_args.cn_pair_root)
+            data_store = ConcatStore([data_store, cn_data_store])
 
-        self.all_data_length = len(list_data_dict)
+        self.all_data_length = len(data_store)
 
 
         rank0_print("Formatting inputs...Skip in lazy mode")
 
         self.total_len = 1000
         self.tokenizer = tokenizer
-        self.list_data_dict = list_data_dict
+        self.data_store = data_store
         self.max_anns = 4
 
         self.data_args = data_args
@@ -226,9 +414,131 @@ class LazySupervisedBboxDataset(Dataset):
         self.add_box_loss = data_args.add_box_loss
         self.use_hard_neg = data_args.use_hard_neg
         self.cn_image_root = data_args.cn_image_root
+        self.missing_image_log_path = data_args.missing_image_log_path
+        self.large_image_log_path = data_args.large_image_log_path
+        self.max_image_pixels = data_args.max_image_pixels
+        self.logged_missing_images = set()
+        self.logged_large_images = set()
 
     def __len__(self):
-        return len(self.list_data_dict)
+        return len(self.data_store)
+
+    def get_caption(self, item):
+        if "caption" in item:
+            return item["caption"]
+
+        messages = item.get("messages")
+        if isinstance(messages, list):
+            for message in messages:
+                if isinstance(message, dict) and message.get("role") == "assistant" and message.get("content"):
+                    return message["content"]
+            for message in messages:
+                if isinstance(message, dict) and message.get("content"):
+                    return message["content"]
+
+        raise KeyError("caption is required, or messages must contain a content field")
+
+    def get_image_path(self, item):
+        if "f_path" in item:
+            return item["f_path"]
+
+        images = item.get("images")
+        if isinstance(images, list) and len(images) > 0:
+            return images[0]
+
+        raise KeyError("f_path is required, or images must contain at least one path")
+
+    def resolve_image_name(self, image_path, is_cn):
+        if os.path.isabs(image_path):
+            return image_path
+        if is_cn:
+            return os.path.join(self.cn_image_root, image_path)
+        return os.path.join(self.image_root, image_path)
+
+    def log_missing_image(self, index, image_path, image_name, error):
+        if self.missing_image_log_path is None:
+            return
+
+        if image_name in self.logged_missing_images:
+            return
+
+        self.logged_missing_images.add(image_name)
+        log_dir = os.path.dirname(self.missing_image_log_path)
+        if log_dir:
+            os.makedirs(log_dir, exist_ok=True)
+
+        record = {
+            "index": index,
+            "image_path": image_path,
+            "resolved_path": image_name,
+            "error": error,
+        }
+        with open(self.missing_image_log_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    def log_large_image(self, index, image_path, image_name, width, height):
+        if self.large_image_log_path is None:
+            return
+
+        if image_name in self.logged_large_images:
+            return
+
+        self.logged_large_images.add(image_name)
+        log_dir = os.path.dirname(self.large_image_log_path)
+        if log_dir:
+            os.makedirs(log_dir, exist_ok=True)
+
+        record = {
+            "index": index,
+            "image_path": image_path,
+            "resolved_path": image_name,
+            "width": width,
+            "height": height,
+            "pixels": width * height,
+            "max_image_pixels": self.max_image_pixels,
+        }
+        with open(self.large_image_log_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    def load_valid_item(self, i):
+        dataset_len = len(self.data_store)
+        for offset in range(dataset_len):
+            cur_idx = (i + offset) % dataset_len
+            item = self.data_store[cur_idx]
+            caption = IMAGE_TOKEN_PATTERN.sub("", self.get_caption(item)).strip()
+            image_path = self.get_image_path(item)
+            caption_short = None
+
+            if "is_cn" not in item.keys():
+                is_cn = False
+                if self.use_short_caption:
+                    if "short_caption" not in item:
+                        raise KeyError("short_caption is required when use_short_caption=True")
+                    caption_short = "a photo of "+item["short_caption"]
+            else:
+                is_cn = True
+                if self.use_short_caption:
+                    if "short_caption" not in item:
+                        raise KeyError("short_caption is required when use_short_caption=True")
+                    caption_short = item["short_caption"]
+
+            image_name = self.resolve_image_name(image_path, is_cn)
+
+            try:
+                image = Image.open(image_name)
+                width, height = image.size
+                if self.max_image_pixels > 0 and width * height > self.max_image_pixels:
+                    self.log_large_image(cur_idx, image_path, image_name, width, height)
+                    image.close()
+                    continue
+                image = image.convert("RGB")
+            except (FileNotFoundError, OSError) as e:
+                self.log_missing_image(cur_idx, image_path, image_name, repr(e))
+                continue
+
+            return item, caption, caption_short, is_cn, image, image_name
+
+        raise RuntimeError("No readable image was found in the dataset.")
 
 
     @property
@@ -245,33 +555,7 @@ class LazySupervisedBboxDataset(Dataset):
     
     def __getitem__(self, i) -> Dict[str, torch.Tensor]:
 
-        item = self.list_data_dict[i]
-        caption = item["caption"]
-        image_path = item["f_path"]
-        caption_short = None
-        
-        if "is_cn" not in item.keys():
-            is_cn = False
-            if self.use_short_caption:
-                if "short_caption" not in item:
-                    raise KeyError("short_caption is required when use_short_caption=True")
-                caption_short = "a photo of "+item["short_caption"]
-        else:
-            is_cn = True
-            if self.use_short_caption:
-                if "short_caption" not in item:
-                    raise KeyError("short_caption is required when use_short_caption=True")
-                caption_short = item["short_caption"]
-
-
-        if is_cn:
-            image_name = os.path.join(self.cn_image_root,image_path)
-        else:
-            image_name = os.path.join(self.image_root,image_path)
-
-        
-        
-        image = Image.open(image_name).convert("RGB")
+        item, caption, caption_short, is_cn, image, image_name = self.load_valid_item(i)
         
 
         prewidth, preheight = image.size
