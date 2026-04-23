@@ -496,6 +496,8 @@ class FG_CLIP2_Model(Fgclip2Model):
                     caption_labels.reshape(-1),
                     ignore_index=-100,
                 )
+                print(f"[DEBUG] long loss: {loss_long.item():.4f}, weight: 1")
+                print(f"[DEBUG] short loss: {loss_short.item():.4f}, weight: 1")
                 print(f"[DEBUG] caption loss: {loss_caption.item():.4f}, weight: {self.caption_loss_weight}")
                 loss = loss + self.caption_loss_weight * loss_caption
         else:

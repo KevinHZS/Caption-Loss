@@ -1,3 +1,6 @@
+#!/usr/bin/env bash
+set -o pipefail
+
 export NCCL_IB_GID_INDEX=5
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export PYTHONPATH=/gemini/space/zyf/FG-CLIP:$PYTHONPATH
@@ -6,13 +9,29 @@ export PYTHONPATH=/gemini/space/zyf/FG-CLIP:$PYTHONPATH
 LLM_MODEL_PATH="/gemini/space/zyf/models/Qwen/Qwen3-1.7B"
 
 ROOT="/gemini/space/zyf/FG-CLIP"
-MODEL_DIR="/gemini/space/gjx/FG-CLIP/models--qihoo360--fg-clip2-base"
-DATA_PATH="/gemini/space/gjx/FG-CLIP/data/FineHARD/debug_coyo0_00000_exact_small.json"
-IMG_ROOT="/gemini/space/gjx/FG-CLIP/data"
-LOG_DIR="$ROOT/output/smoke_debug_8gpu_all_checkgpu_bs512_patch1024"
+DATA_ROOT="/gemini/space/gjx/FG-CLIP"
+MODEL_DIR="$DATA_ROOT/siglip2-so400m-patch16-naflex"
+DATA_WORK_DIR="$DATA_ROOT/data/TeleMM"
+DENSE_SOURCE="$DATA_WORK_DIR/DenseFusion-1M_cleaned.jsonl"
+PT_SAMPLE_PATH="$DATA_WORK_DIR/pt_llava-ov-mid-v1_sample1M_cleaned.jsonl"
+DATA_PATH="${DATA_PATH:-$DATA_WORK_DIR/stage1_longonly_2M_cleaned_manifest.txt}"
+IMG_ROOT="${IMG_ROOT:-$DATA_ROOT/data}"
+LOG_DIR="$ROOT/output/stage1_siglip2_bs256_so_zero2_longonly_2M_cleaned"
 
 mkdir -p "$LOG_DIR"
+mkdir -p "$DATA_WORK_DIR"
 cd "$ROOT"
+
+TRAIN_LOG="$LOG_DIR/train_$(date +%Y%m%d_%H%M%S).log"
+exec > >(tee -a "$TRAIN_LOG") 2>&1
+
+echo "Training log: $TRAIN_LOG"
+echo "Started at: $(date)"
+echo "LOG_DIR=$LOG_DIR"
+
+printf "%s\n%s\n" "$DENSE_SOURCE" "$PT_SAMPLE_PATH" > "$DATA_PATH"
+echo "Manifest:"
+cat "$DATA_PATH"
 
 nvidia-smi \
   --query-gpu=timestamp,index,utilization.gpu,utilization.memory,memory.used,memory.total,power.draw \
@@ -20,7 +39,16 @@ nvidia-smi \
   -l 2 > "$LOG_DIR/gpu_usage.csv" &
 MON_PID=$!
 
-trap 'kill $MON_PID 2>/dev/null' EXIT
+cleanup() {
+    status=$?
+    kill $MON_PID 2>/dev/null
+    echo "Finished at: $(date)"
+    echo "Exit status: $status"
+    echo "Training log: $TRAIN_LOG"
+    exit $status
+}
+
+trap cleanup EXIT
 
 deepspeed fgclip2/train/train.py \
     --deepspeed "$ROOT/scripts/zero2.json" \
@@ -30,7 +58,7 @@ deepspeed fgclip2/train/train.py \
     --image_folder "$IMG_ROOT" \
     --cn_and_en_2_train False \
     --loss_type reduce \
-    --from_siglip2 False \
+    --from_siglip2 True \
     --naflex_train True \
     --max_num_patches 1024 \
     --output_dir "$LOG_DIR" \
@@ -44,7 +72,7 @@ deepspeed fgclip2/train/train.py \
     --bf16 True \
     --per_device_train_batch_size 32 \
     --per_device_eval_batch_size 4 \
-    --gradient_accumulation_steps 16 \
+    --gradient_accumulation_steps 8 \
     --num_train_epochs 1 \
     --save_strategy "epoch" \
     --save_total_limit 1 \
@@ -65,6 +93,4 @@ deepspeed fgclip2/train/train.py \
     --caption_loss_weight 1.0 \
     --llm_model_path $LLM_MODEL_PATH \
     --llm_gradient_checkpointing True \
-
-kill $MON_PID 2>/dev/null
-trap - EXIT
+    --projector_lr 1e-5 
