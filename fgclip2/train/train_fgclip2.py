@@ -409,7 +409,9 @@ class LazySupervisedBboxDataset(Dataset):
             # labels: shift left, mask pad positions with -100
             labels = llm_input_ids[0, 1:].clone()
             labels = torch.cat([labels, torch.tensor([-100], dtype=labels.dtype)])
-            labels[llm_attention_mask[0, 1:] == 0] = -100  # mask pad positions
+            # mask pad positions: attention_mask[1:] aligns with labels[:-1], last position is always -100
+            pad_mask = llm_attention_mask[0, 1:] == 0  # [L-1]
+            labels[:-1][pad_mask] = -100
             data_dict['llm_input_ids'] = llm_input_ids
             data_dict['llm_attention_mask'] = llm_attention_mask
             data_dict['caption_labels'] = labels.unsqueeze(0)  # [1, L]
