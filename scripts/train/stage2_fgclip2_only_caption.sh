@@ -42,9 +42,9 @@ deepspeed fgclip2/train/train.py \
     --max_seq_length 196 \
     --save_safetensors True \
     --bf16 True \
-    --per_device_train_batch_size 512 \
+    --per_device_train_batch_size 64 \
     --per_device_eval_batch_size 4 \
-    --gradient_accumulation_steps 1 \
+    --gradient_accumulation_steps 8 \
     --num_train_epochs 1 \
     --save_strategy "epoch" \
     --save_total_limit 1 \
