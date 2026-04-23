@@ -17,6 +17,8 @@ PT_SAMPLE_PATH="$DATA_WORK_DIR/pt_llava-ov-mid-v1_sample1M_cleaned.jsonl"
 DATA_PATH="${DATA_PATH:-$DATA_WORK_DIR/stage1_longonly_2M_cleaned_manifest.txt}"
 IMG_ROOT="${IMG_ROOT:-$DATA_ROOT/data}"
 LOG_DIR="$ROOT/output/stage1_siglip2_bs256_so_zero2_longonly_2M_cleaned"
+USE_SHORT_CAPTION="${USE_SHORT_CAPTION:-False}"
+MAX_IMAGE_PIXELS="${MAX_IMAGE_PIXELS:-50000000}"
 
 mkdir -p "$LOG_DIR"
 mkdir -p "$DATA_WORK_DIR"
@@ -27,7 +29,10 @@ exec > >(tee -a "$TRAIN_LOG") 2>&1
 
 echo "Training log: $TRAIN_LOG"
 echo "Started at: $(date)"
+echo "ROOT=$ROOT"
 echo "LOG_DIR=$LOG_DIR"
+echo "USE_SHORT_CAPTION=$USE_SHORT_CAPTION"
+echo "MAX_IMAGE_PIXELS=$MAX_IMAGE_PIXELS"
 
 printf "%s\n%s\n" "$DENSE_SOURCE" "$PT_SAMPLE_PATH" > "$DATA_PATH"
 echo "Manifest:"
@@ -56,6 +61,9 @@ deepspeed fgclip2/train/train.py \
     --model_name_or_path "$MODEL_DIR" \
     --data_path "$DATA_PATH" \
     --image_folder "$IMG_ROOT" \
+    --missing_image_log_path "$LOG_DIR/missing_images.jsonl" \
+    --large_image_log_path "$LOG_DIR/large_images.jsonl" \
+    --max_image_pixels "$MAX_IMAGE_PIXELS" \
     --cn_and_en_2_train False \
     --loss_type reduce \
     --from_siglip2 True \
@@ -68,14 +76,15 @@ deepspeed fgclip2/train/train.py \
     --box_image_size 512 \
     --base_seq_length 64 \
     --max_seq_length 196 \
+    --use_short_caption "$USE_SHORT_CAPTION" \
     --save_safetensors True \
     --bf16 True \
     --per_device_train_batch_size 32 \
     --per_device_eval_batch_size 4 \
     --gradient_accumulation_steps 8 \
     --num_train_epochs 1 \
-    --save_strategy "epoch" \
-    --save_total_limit 1 \
+    --save_strategy "steps" \
+    --save_steps 10 \
     --learning_rate 1e-6 \
     --weight_decay 0.001 \
     --adam_beta1 0.9 \
@@ -85,7 +94,7 @@ deepspeed fgclip2/train/train.py \
     --lr_scheduler_type "cosine" \
     --logging_steps 1 \
     --tf32 True \
-    --gradient_checkpointing False \
+    --gradient_checkpointing True \
     --dataloader_num_workers 8 \
     --dataloader_pin_memory True \
     --lazy_preprocess True \
