@@ -99,6 +99,7 @@ class DataArguments:
     max_num_patches: int = 0
     caption_loss_weight: float = field(default=0.0)
     llm_model_path: Optional[str] = field(default=None)
+    llm_gradient_checkpointing: bool = field(default=False)
 
 
     
@@ -605,6 +606,9 @@ def train():
             llm_model_path=data_args.llm_model_path,
         )
         model.llm_caption_decoder = llm_caption_decoder
+        if data_args.llm_gradient_checkpointing:
+            model.llm_caption_decoder.llm.gradient_checkpointing_enable()
+            print(f"[DEBUG] LLM gradient checkpointing enabled")
         llm_tokenizer = AutoTokenizer.from_pretrained(data_args.llm_model_path)
         if llm_tokenizer.pad_token is None:
             llm_tokenizer.pad_token = llm_tokenizer.eos_token
