@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoConfig
 
 
@@ -9,47 +10,45 @@ def pool_caption_image_patch_tokens(
     spatial_shapes: torch.Tensor,
 ):
     batch_size, _, hidden_dim = image_patch_tokens.shape
-    pooled_tokens_per_image = []
-    pooled_masks_per_image = []
-    max_pooled_tokens = 0
+    max_height = int(spatial_shapes[:, 0].max().item())
+    max_width = int(spatial_shapes[:, 1].max().item())
+    dense_tokens = image_patch_tokens.new_zeros(batch_size, max_height, max_width, hidden_dim)
+    dense_mask = pixel_attention_mask.new_zeros(batch_size, max_height, max_width)
 
     for batch_index in range(batch_size):
         height = int(spatial_shapes[batch_index, 0].item())
         width = int(spatial_shapes[batch_index, 1].item())
         real_token_count = height * width
+        dense_tokens[batch_index, :height, :width] = image_patch_tokens[batch_index, :real_token_count].reshape(
+            height, width, hidden_dim
+        )
+        dense_mask[batch_index, :height, :width] = pixel_attention_mask[batch_index, :real_token_count].reshape(
+            height, width
+        )
 
-        image_tokens = image_patch_tokens[batch_index, :real_token_count].reshape(height, width, hidden_dim)
-        image_mask = pixel_attention_mask[batch_index, :real_token_count].reshape(height, width).bool()
+    pooled_height = (max_height + 1) // 2
+    pooled_width = (max_width + 1) // 2
+    pad_height = pooled_height * 2 - max_height
+    pad_width = pooled_width * 2 - max_width
 
-        pooled_blocks = []
-        pooled_mask = []
-        for row_start in range(0, height, 2):
-            for col_start in range(0, width, 2):
-                token_block = image_tokens[row_start : row_start + 2, col_start : col_start + 2].reshape(-1, hidden_dim)
-                mask_block = image_mask[row_start : row_start + 2, col_start : col_start + 2].reshape(-1)
-                if mask_block.any():
-                    pooled_blocks.append(token_block[mask_block].mean(dim=0))
-                    pooled_mask.append(1)
-                else:
-                    pooled_blocks.append(image_patch_tokens.new_zeros(hidden_dim))
-                    pooled_mask.append(0)
+    padded_tokens = F.pad(dense_tokens, (0, 0, 0, pad_width, 0, pad_height))
+    padded_mask = F.pad(dense_mask, (0, pad_width, 0, pad_height))
 
-        pooled_tokens = torch.stack(pooled_blocks, dim=0)
-        pooled_attention_mask = torch.tensor(pooled_mask, device=pixel_attention_mask.device, dtype=pixel_attention_mask.dtype)
+    token_blocks = padded_tokens.reshape(batch_size, pooled_height, 2, pooled_width, 2, hidden_dim)
+    token_blocks = token_blocks.permute(0, 1, 3, 2, 4, 5).reshape(batch_size, pooled_height, pooled_width, 4, hidden_dim)
 
-        pooled_tokens_per_image.append(pooled_tokens)
-        pooled_masks_per_image.append(pooled_attention_mask)
-        max_pooled_tokens = max(max_pooled_tokens, pooled_tokens.shape[0])
+    mask_blocks = padded_mask.reshape(batch_size, pooled_height, 2, pooled_width, 2)
+    mask_blocks = mask_blocks.permute(0, 1, 3, 2, 4).reshape(batch_size, pooled_height, pooled_width, 4)
 
-    padded_tokens = image_patch_tokens.new_zeros(batch_size, max_pooled_tokens, hidden_dim)
-    padded_attention_mask = pixel_attention_mask.new_zeros(batch_size, max_pooled_tokens)
+    mask_weights = mask_blocks.to(dtype=image_patch_tokens.dtype)
+    mask_counts = mask_weights.sum(dim=-1, keepdim=True)
+    pooled_tokens = (token_blocks * mask_weights.unsqueeze(-1)).sum(dim=3)
+    pooled_tokens = pooled_tokens / mask_counts.clamp_min(1.0)
+    pooled_tokens = pooled_tokens.reshape(batch_size, pooled_height * pooled_width, hidden_dim)
+    pooled_attention_mask = (mask_counts.squeeze(-1) > 0).reshape(batch_size, pooled_height * pooled_width)
+    pooled_attention_mask = pooled_attention_mask.to(dtype=pixel_attention_mask.dtype)
 
-    for batch_index, (pooled_tokens, pooled_attention_mask) in enumerate(zip(pooled_tokens_per_image, pooled_masks_per_image)):
-        current_token_count = pooled_tokens.shape[0]
-        padded_tokens[batch_index, :current_token_count] = pooled_tokens
-        padded_attention_mask[batch_index, :current_token_count] = pooled_attention_mask
-
-    return padded_tokens, padded_attention_mask
+    return pooled_tokens, pooled_attention_mask
 
 
 class LLMCaptionDecoder(nn.Module):
