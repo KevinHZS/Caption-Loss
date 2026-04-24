@@ -18,6 +18,7 @@ import transformers
 
 from torch.utils.data import Dataset
 from fgclip2.train.local_trainer import CLIPTrainer
+from fgclip2.train.projector_utils import configure_projector_only_training, load_projector_from_path
 
 
 import torch.distributed as dist
@@ -108,6 +109,8 @@ class DataArguments:
     caption_loss_weight: float = field(default=0.0)
     llm_model_path: Optional[str] = field(default=None)
     llm_gradient_checkpointing: bool = field(default=False)
+    train_projector_only: bool = field(default=False)
+    load_projector_from: Optional[str] = field(default=None)
     missing_image_log_path: Optional[str] = field(
         default=None,
         metadata={"help": "Path to a jsonl log file for missing or unreadable training images."},
@@ -950,6 +953,13 @@ def train():
         if llm_tokenizer.pad_token is None:
             llm_tokenizer.pad_token = llm_tokenizer.eos_token
         print(f"[DEBUG] LLMCaptionDecoder loaded from {data_args.llm_model_path}")
+        if data_args.load_projector_from is not None:
+            load_projector_from_path(model, data_args.load_projector_from)
+            print(f"[DEBUG] projector loaded from {data_args.load_projector_from}")
+        if data_args.train_projector_only:
+            configure_projector_only_training(model)
+            model.train_projector_only = True
+            print("[DEBUG] train_projector_only enabled")
     print(f"[DEBUG] caption_loss_weight={data_args.caption_loss_weight}, llm_model_path={data_args.llm_model_path}")
 
     data_module = make_supervised_data_module(data_args=data_args, img_preprocess=image_processor, tokenizer=tokenizer, llm_tokenizer=llm_tokenizer, is_naflex=training_args.naflex_train)

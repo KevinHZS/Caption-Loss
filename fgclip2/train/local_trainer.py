@@ -190,6 +190,7 @@ from transformers.utils.import_utils import requires
 from transformers.utils.quantization_config import QuantizationMethod
 
 from .logging_utils import prepare_loss_metrics_for_logging
+from .projector_utils import save_projector_to_output_dir
 
 DEFAULT_CALLBACKS = [DefaultFlowCallback]
 DEFAULT_PROGRESS_CALLBACK = ProgressCallback
@@ -511,6 +512,19 @@ class CLIPTrainer(Trainer):
 
     def _save_checkpoint(self, model, trial, metrics=None):
         super(CLIPTrainer, self)._save_checkpoint(model, trial)
+        if getattr(self.model, "llm_caption_decoder", None) is not None:
+            checkpoint_folder = f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
+            output_dir = os.path.join(self.args.output_dir, checkpoint_folder)
+            save_projector_to_output_dir(self.model, output_dir)
 
     def _save(self, output_dir: Optional[str] = None, state_dict=None):
+        if output_dir is None:
+            output_dir = self.args.output_dir
+
+        if getattr(self.model, "llm_caption_decoder", None) is not None:
+            save_projector_to_output_dir(self.model, output_dir)
+
+        if getattr(self.model, "train_projector_only", False):
+            return
+
         super(CLIPTrainer, self)._save(output_dir, state_dict)
