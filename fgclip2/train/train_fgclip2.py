@@ -109,6 +109,7 @@ class DataArguments:
     caption_loss_weight: float = field(default=0.0)
     llm_model_path: Optional[str] = field(default=None)
     llm_gradient_checkpointing: bool = field(default=False)
+    caption_pool_2x2_tokens: bool = field(default=False)
     train_projector_only: bool = field(default=False)
     load_projector_from: Optional[str] = field(default=None)
     missing_image_log_path: Optional[str] = field(
@@ -944,6 +945,7 @@ def train():
         llm_caption_decoder = LLMCaptionDecoder(
             vis_hidden_dim=model.config.vision_config.hidden_size,
             llm_model_path=data_args.llm_model_path,
+            caption_pool_2x2_tokens=data_args.caption_pool_2x2_tokens,
         )
         model.llm_caption_decoder = llm_caption_decoder
         if data_args.llm_gradient_checkpointing:

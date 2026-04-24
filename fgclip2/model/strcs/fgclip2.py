@@ -494,14 +494,14 @@ class FG_CLIP2_Model(Fgclip2Model):
         if text_long is not None:
             loss = combine_available_losses(loss_short, loss_long)
             if self.caption_loss_weight > 0.0 and self.llm_caption_decoder is not None and caption_labels is not None:
-                N = vision_outputs.last_hidden_state.shape[1]
-                caption_logits = self.llm_caption_decoder(
+                caption_logits, visual_token_count = self.llm_caption_decoder(
                     image_patch_tokens=vision_outputs.last_hidden_state,
                     pixel_attention_mask=pixel_attention_mask,
+                    spatial_shapes=spatial_shapes,
                     llm_input_ids=llm_input_ids,
                     llm_attention_mask=llm_attention_mask,
                 )
-                text_logits = get_caption_text_logits(caption_logits, N)  # [B, L, vocab_size]
+                text_logits = get_caption_text_logits(caption_logits, visual_token_count)  # [B, L, vocab_size]
                 loss_caption = F.cross_entropy(
                     text_logits.reshape(-1, text_logits.shape[-1]),
                     caption_labels.reshape(-1),
@@ -735,4 +735,3 @@ class FG_CLIP2_Model(Fgclip2Model):
             )
 
         return loss
-
