@@ -195,6 +195,10 @@ from .projector_utils import save_projector_to_output_dir
 DEFAULT_CALLBACKS = [DefaultFlowCallback]
 DEFAULT_PROGRESS_CALLBACK = ProgressCallback
 
+
+def drop_empty_param_groups(param_groups):
+    return [group for group in param_groups if group.get("params")]
+
 if is_in_notebook():
     from transformers.utils.notebook import NotebookProgressCallback
 
@@ -505,6 +509,7 @@ class CLIPTrainer(Trainer):
                     },
                 ]
 
+            optimizer_grouped_parameters = drop_empty_param_groups(optimizer_grouped_parameters)
             optimizer_cls, optimizer_kwargs = Trainer.get_optimizer_cls_and_kwargs(self.args)
             self.optimizer = optimizer_cls(optimizer_grouped_parameters, **optimizer_kwargs)
 
