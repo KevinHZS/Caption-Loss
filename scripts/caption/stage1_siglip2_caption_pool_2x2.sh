@@ -92,9 +92,9 @@ deepspeed fgclip2/train/train.py \
     --use_short_caption_contrastive_loss "$USE_SHORT_CAPTION_CONTRASTIVE_LOSS" \
     --save_safetensors True \
     --bf16 True \
-    --per_device_train_batch_size 32 \
+    --per_device_train_batch_size 48 \
     --per_device_eval_batch_size 4 \
-    --gradient_accumulation_steps 8 \
+    --gradient_accumulation_steps 48 \
     --num_train_epochs 1 \
     --save_strategy "steps" \
     --save_steps 10 \
