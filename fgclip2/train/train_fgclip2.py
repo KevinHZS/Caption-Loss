@@ -998,7 +998,7 @@ def train():
         model.llm_caption_decoder = llm_caption_decoder
         if data_args.llm_gradient_checkpointing:
             model.llm_caption_decoder.llm.gradient_checkpointing_enable()
-            print(f"[DEBUG] LLM gradient checkpointing enabled")
+            # print(f"[DEBUG] LLM gradient checkpointing enabled")
         llm_tokenizer = AutoTokenizer.from_pretrained(data_args.llm_model_path)
         if llm_tokenizer.pad_token is None:
             llm_tokenizer.pad_token = llm_tokenizer.eos_token

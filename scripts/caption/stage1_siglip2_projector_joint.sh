@@ -19,7 +19,7 @@ DENSE_SOURCE="$DATA_WORK_DIR/DenseFusion-1M_cleaned.jsonl"
 PT_SAMPLE_PATH="$DATA_WORK_DIR/pt_llava-ov-mid-v1_sample1M_cleaned.jsonl"
 DATA_PATH="${DATA_PATH:-$DATA_WORK_DIR/stage1_longonly_2M_cleaned_manifest.txt}"
 IMG_ROOT="${IMG_ROOT:-$DATA_ROOT/data}"
-PROJECTOR_DIR="${PROJECTOR_DIR:-$ROOT/output/stage1_siglip2_projector_only/projector}"
+PROJECTOR_DIR="/gemini/space/zyf/FG-CLIP/output/stage1_siglip2_projector_only/projector"
 LOG_DIR="${LOG_DIR:-$ROOT/output/stage1_siglip2_projector_joint}"
 USE_SHORT_CAPTION_CONTRASTIVE_LOSS="${USE_SHORT_CAPTION_CONTRASTIVE_LOSS:-False}"
 MAX_IMAGE_PIXELS="${MAX_IMAGE_PIXELS:-50000000}"
@@ -48,8 +48,9 @@ echo "WANDB_MODE=$WANDB_MODE"
 echo "RUN_NAME=$RUN_NAME"
 
 printf "%s\n%s\n" "$DENSE_SOURCE" "$PT_SAMPLE_PATH" > "$DATA_PATH"
-echo "Manifest:"
-cat "$DATA_PATH"
+DATA_PATH="/gemini/space/gjx/FG-CLIP/data/FineHARD/debug_coyo0_00000_exact_small.json"
+# echo "Manifest:"
+# cat "$DATA_PATH"
 
 nvidia-smi \
   --query-gpu=timestamp,index,utilization.gpu,utilization.memory,memory.used,memory.total,power.draw \
