@@ -94,6 +94,7 @@ class FG_CLIP2_Model(Fgclip2Model):
         self.pad_token_id = 0
         self.world_size = 0
         self.loss_type = None
+        self.long_loss_weight = 1.0
         self.caption_loss_weight = 0.0
         self.llm_caption_decoder = None
 
@@ -500,7 +501,7 @@ class FG_CLIP2_Model(Fgclip2Model):
 
 
         if text_long is not None:
-            loss = combine_available_losses(loss_short, loss_long)
+            loss = combine_available_losses(loss_short, loss_long, long_loss_weight=self.long_loss_weight)
             if self.caption_loss_weight > 0.0 and self.llm_caption_decoder is not None and caption_labels is not None:
                 caption_logits, visual_token_count = self.llm_caption_decoder(
                     image_patch_tokens=vision_outputs.last_hidden_state,

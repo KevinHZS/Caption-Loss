@@ -18,7 +18,7 @@ import transformers
 
 from torch.utils.data import Dataset
 from fgclip2.train.local_trainer import CLIPTrainer
-from fgclip2.train.projector_utils import configure_projector_only_training, load_projector_from_path
+from fgclip2.train.projector_utils import configure_projector_only_training, freeze_projector, load_projector_from_path
 
 
 import torch.distributed as dist
@@ -107,11 +107,13 @@ class DataArguments:
     cn_pair_root: Optional[str] = field(default=None)
     cn_image_root: Optional[str] = field(default=None)
     max_num_patches: int = 0
+    long_loss_weight: float = field(default=1.0)
     caption_loss_weight: float = field(default=0.0)
     llm_model_path: Optional[str] = field(default=None)
     llm_gradient_checkpointing: bool = field(default=False)
     caption_pool_2x2_tokens: bool = field(default=False)
     train_projector_only: bool = field(default=False)
+    freeze_projector: bool = field(default=False)
     load_projector_from: Optional[str] = field(default=None)
     missing_image_log_path: Optional[str] = field(
         default=None,
@@ -945,6 +947,7 @@ def train():
 
     model.world_size = training_args.train_use_word_size
     model.loss_type = model_args.loss_type
+    model.long_loss_weight = data_args.long_loss_weight
     model.caption_loss_weight = data_args.caption_loss_weight
 
     llm_tokenizer = None
@@ -966,6 +969,9 @@ def train():
         if data_args.load_projector_from is not None:
             load_projector_from_path(model, data_args.load_projector_from)
             print(f"[DEBUG] projector loaded from {data_args.load_projector_from}")
+        if data_args.freeze_projector:
+            freeze_projector(model)
+            print("[DEBUG] freeze_projector enabled")
         if data_args.train_projector_only:
             configure_projector_only_training(model)
             model.train_projector_only = True

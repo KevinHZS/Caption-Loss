@@ -26,6 +26,12 @@ def configure_projector_only_training(model) -> None:
         param.requires_grad_("llm_caption_decoder.projector" in name)
 
 
+def freeze_projector(model) -> None:
+    for name, param in model.named_parameters():
+        if "llm_caption_decoder.projector" in name:
+            param.requires_grad_(False)
+
+
 def extract_projector_state_dict(state_dict):
     if "state_dict" in state_dict and isinstance(state_dict["state_dict"], dict):
         state_dict = state_dict["state_dict"]

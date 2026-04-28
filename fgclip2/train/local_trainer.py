@@ -189,7 +189,7 @@ from transformers.utils.deprecation import deprecate_kwarg
 from transformers.utils.import_utils import requires
 from transformers.utils.quantization_config import QuantizationMethod
 
-from .logging_utils import prepare_loss_metrics_for_logging
+from .logging_utils import compute_module_grad_norms, prepare_loss_metrics_for_logging
 from .projector_utils import save_projector_to_output_dir
 
 DEFAULT_CALLBACKS = [DefaultFlowCallback]
@@ -198,6 +198,21 @@ DEFAULT_PROGRESS_CALLBACK = ProgressCallback
 
 def drop_empty_param_groups(param_groups):
     return [group for group in param_groups if group.get("params")]
+
+
+class ModuleGradNormCallback(TrainerCallback):
+    def __init__(self, trainer):
+        self.trainer = trainer
+
+    def on_pre_optimizer_step(self, args, state, control, **kwargs):
+        model = kwargs.get("model")
+        if model is None:
+            return control
+
+        for name, value in compute_module_grad_norms(model).items():
+            self.trainer._extra_grad_logs[name] = self.trainer._extra_grad_logs.get(name, 0.0) + value
+            self.trainer._extra_grad_log_counts[name] = self.trainer._extra_grad_log_counts.get(name, 0) + 1
+        return control
 
 if is_in_notebook():
     from transformers.utils.notebook import NotebookProgressCallback
@@ -393,7 +408,10 @@ class CLIPTrainer(Trainer):
     def __init__(self, *args, **kwargs):
         self._extra_loss_logs = {}
         self._extra_loss_log_counts = {}
+        self._extra_grad_logs = {}
+        self._extra_grad_log_counts = {}
         super().__init__(*args, **kwargs)
+        self.add_callback(ModuleGradNormCallback(self))
 
     def _get_train_sampler(self, train_dataset: Optional[Dataset] = None) -> Optional[torch.utils.data.Sampler]:
         if train_dataset is None:
@@ -434,8 +452,14 @@ class CLIPTrainer(Trainer):
             count = self._extra_loss_log_counts.get(name, 0)
             if count > 0:
                 merged_logs[name] = total / count
+        for name, total in self._extra_grad_logs.items():
+            count = self._extra_grad_log_counts.get(name, 0)
+            if count > 0:
+                merged_logs[name] = total / count
         self._extra_loss_logs = {}
         self._extra_loss_log_counts = {}
+        self._extra_grad_logs = {}
+        self._extra_grad_log_counts = {}
         super().log(merged_logs, start_time=start_time)
 
     def create_optimizer(self):
