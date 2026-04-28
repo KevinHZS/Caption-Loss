@@ -254,7 +254,7 @@ class Fgclip2Config(PretrainedConfig):
     model_type = "fgclip2"
     sub_configs = {"text_config": Fgclip2TextConfig, "vision_config": Fgclip2VisionConfig}
 
-    def __init__(self, text_config=None, vision_config=None, **kwargs):
+    def __init__(self, text_config=None, vision_config=None, enable_region_heads=True, **kwargs):
         super().__init__(**kwargs)
 
         if text_config is None:
@@ -267,6 +267,7 @@ class Fgclip2Config(PretrainedConfig):
 
         self.text_config = Fgclip2TextConfig(**text_config)
         self.vision_config = Fgclip2VisionConfig(**vision_config)
+        self.enable_region_heads = enable_region_heads
 
         self.initializer_factor = 1.0
 

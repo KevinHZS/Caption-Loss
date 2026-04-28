@@ -45,6 +45,7 @@ from torch.utils.data import  IterableDataset
 import random
 import numpy as np
 
+from fgclip2.model.strcs.configuration_fgclip2 import Fgclip2Config
 from fgclip2.model.strcs.fgclip2 import FG_CLIP2_Model
 from transformers import AutoProcessor,Siglip2ImageProcessor
 
@@ -918,21 +919,28 @@ def train():
     else:
         pass
 
-    model = FG_CLIP2_Model.from_pretrained(model_args.model_name_or_path)
+    config = Fgclip2Config.from_pretrained(model_args.model_name_or_path)
+    config.enable_region_heads = data_args.add_box_loss or data_args.use_hard_neg
+    model = FG_CLIP2_Model.from_pretrained(model_args.model_name_or_path, config=config)
 
     config = model.config
     import numpy as np
 
-    model.logit_scale_finegraind = torch.nn.Parameter(torch.ones([]) * model_args.log_scale)
-    model.logit_scale_hardneg = torch.nn.Parameter(torch.ones([]) * model_args.log_scale)
+    model.logit_scale_finegraind = (
+        torch.nn.Parameter(torch.ones([]) * model_args.log_scale) if data_args.add_box_loss else None
+    )
+    model.logit_scale_hardneg = (
+        torch.nn.Parameter(torch.ones([]) * model_args.log_scale) if data_args.use_hard_neg else None
+    )
     
     if training_args.from_siglip2:
         print("copy and resize")
         model.resize_postion_embeding()
         model.copy_weight()
         print("copy_weight")
-        model.copy_dense_feature_head()
-        print("copy_dense_feature_head")
+        if model.enable_region_heads:
+            model.copy_dense_feature_head()
+            print("copy_dense_feature_head")
         print("fine")
 
     model.world_size = training_args.train_use_word_size

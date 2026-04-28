@@ -81,8 +81,13 @@ class FG_CLIP2_Model(Fgclip2Model):
         self.embed_dim = text_config.hidden_size
 
         self.longtext_head = nn.Linear(self.embed_dim, self.embed_dim)
-        self.boxtext_head = nn.Linear(self.embed_dim, self.embed_dim)
-        self.dense_feature_head = Fgclip2MultiheadAttentionPoolingHead(vision_config)
+        self.enable_region_heads = getattr(config, "enable_region_heads", True)
+        if self.enable_region_heads:
+            self.boxtext_head = nn.Linear(self.embed_dim, self.embed_dim)
+            self.dense_feature_head = Fgclip2MultiheadAttentionPoolingHead(vision_config)
+        else:
+            self.boxtext_head = None
+            self.dense_feature_head = None
 
         # Initialize weights and apply final processing
         self.thresholds = 0.0
@@ -101,10 +106,13 @@ class FG_CLIP2_Model(Fgclip2Model):
         with torch.no_grad():
             self.longtext_head.weight.data.copy_(self.text_model.head.weight.data)
             self.longtext_head.bias.data.copy_(self.text_model.head.bias.data)
-            self.boxtext_head.weight.data.copy_(self.text_model.head.weight.data)
-            self.boxtext_head.bias.data.copy_(self.text_model.head.bias.data)
+            if self.boxtext_head is not None:
+                self.boxtext_head.weight.data.copy_(self.text_model.head.weight.data)
+                self.boxtext_head.bias.data.copy_(self.text_model.head.bias.data)
 
     def copy_dense_feature_head(self,):
+        if self.dense_feature_head is None:
+            return
         with torch.no_grad():
             self.dense_feature_head.load_state_dict(self.vision_model.head.state_dict())
 
