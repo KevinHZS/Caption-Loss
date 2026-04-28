@@ -46,9 +46,8 @@ echo "WANDB_MODE=$WANDB_MODE"
 echo "RUN_NAME=$RUN_NAME"
 
 printf "%s\n%s\n" "$DENSE_SOURCE" "$PT_SAMPLE_PATH" > "$DATA_PATH"
-DATA_PATH="/gemini/space/gjx/FG-CLIP/data/FineHARD/debug_coyo0_00000_exact_small.json"
-# echo "Manifest:"
-# cat "$DATA_PATH"
+echo "Manifest:"
+cat "$DATA_PATH"
 
 nvidia-smi \
   --query-gpu=timestamp,index,utilization.gpu,utilization.memory,memory.used,memory.total,power.draw \
@@ -93,12 +92,12 @@ deepspeed fgclip2/train/train.py \
     --use_short_caption_contrastive_loss "$USE_SHORT_CAPTION_CONTRASTIVE_LOSS" \
     --save_safetensors True \
     --bf16 True \
-    --per_device_train_batch_size 8 \
+    --per_device_train_batch_size 48 \
     --per_device_eval_batch_size 4 \
-    --gradient_accumulation_steps 8 \
-    --num_train_epochs 1 \
+    --gradient_accumulation_steps 3 \
+    --num_train_epochs 2 \
     --save_strategy "steps" \
-    --save_steps 10 \
+    --save_steps 100 \
     --learning_rate 1e-6 \
     --weight_decay 0.001 \
     --adam_beta1 0.9 \
