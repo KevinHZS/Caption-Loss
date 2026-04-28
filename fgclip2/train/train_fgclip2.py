@@ -907,6 +907,8 @@ def train():
     parser = transformers.HfArgumentParser(
         (ModelArguments, DataArguments, TrainingArguments))
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
+    if data_args.freeze_projector and data_args.train_projector_only:
+        raise ValueError("--freeze_projector True and --train_projector_only True are mutually exclusive.")
     local_rank = training_args.local_rank
     compute_dtype = (torch.float16 if training_args.fp16 else (torch.bfloat16 if training_args.bf16 else torch.float32))
     # compute_dtype = torch.float32
