@@ -98,7 +98,7 @@ deepspeed fgclip2/train/train.py \
     --per_device_train_batch_size 48 \
     --per_device_eval_batch_size 4 \
     --gradient_accumulation_steps 48 \
-    --num_train_epochs 1 \
+    --num_train_epochs 3 \
     --save_strategy "steps" \
     --save_steps 10 \
     --learning_rate 1e-6 \
@@ -121,4 +121,6 @@ deepspeed fgclip2/train/train.py \
     --llm_model_path "$LLM_MODEL_PATH" \
     --llm_gradient_checkpointing True \
     --projector_lr 1e-5 \
-    --load_projector_from "$PROJECTOR_DIR"
+    --load_projector_from "$PROJECTOR_DIR" \
+    --freeze_projector True \
+    --long_loss_weight 0.0 \
