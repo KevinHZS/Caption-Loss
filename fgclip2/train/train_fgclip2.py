@@ -97,9 +97,9 @@ class DataArguments:
     image_grid_pinpoints: Optional[str] = field(default=None)
     max_seq_length: int = 64*4-60
     base_seq_length: int = 64
-    use_short_caption: bool = field(
+    use_short_caption_contrastive_loss: bool = field(
         default=True,
-        metadata={"help": "Whether to train with the short caption image-text loss."},
+        metadata={"help": "Whether to train with the short caption image-text contrastive loss."},
     )
     box_image_size: int = 224
     add_box_loss: bool = field(default=False)
@@ -109,6 +109,7 @@ class DataArguments:
     max_num_patches: int = 0
     long_loss_weight: float = field(default=1.0)
     caption_loss_weight: float = field(default=0.0)
+    short_caption_loss_weight: float = field(default=0.0)
     llm_model_path: Optional[str] = field(default=None)
     llm_gradient_checkpointing: bool = field(default=False)
     caption_pool_2x2_tokens: bool = field(default=False)
@@ -453,7 +454,8 @@ class LazySupervisedBboxDataset(Dataset):
         self.image_root = data_args.image_folder
         self.max_length = data_args.max_seq_length
         self.base_length = data_args.base_seq_length
-        self.use_short_caption = data_args.use_short_caption
+        self.use_short_caption_contrastive_loss = data_args.use_short_caption_contrastive_loss
+        self.use_short_caption_llm_loss = data_args.short_caption_loss_weight > 0.0
         self.box_image_size = data_args.box_image_size
         self.add_box_loss = data_args.add_box_loss
         self.use_hard_neg = data_args.use_hard_neg
@@ -558,15 +560,15 @@ class LazySupervisedBboxDataset(Dataset):
 
             if "is_cn" not in item.keys():
                 is_cn = False
-                if self.use_short_caption:
+                if self.use_short_caption_contrastive_loss or self.use_short_caption_llm_loss:
                     if "short_caption" not in item:
-                        raise KeyError("short_caption is required when use_short_caption=True")
+                        raise KeyError("short_caption is required when short caption losses are enabled")
                     caption_short = "a photo of "+item["short_caption"]
             else:
                 is_cn = True
-                if self.use_short_caption:
+                if self.use_short_caption_contrastive_loss or self.use_short_caption_llm_loss:
                     if "short_caption" not in item:
-                        raise KeyError("short_caption is required when use_short_caption=True")
+                        raise KeyError("short_caption is required when short caption losses are enabled")
                     caption_short = item["short_caption"]
 
             image_name = self.resolve_image_name(image_path, is_cn)
@@ -630,7 +632,7 @@ class LazySupervisedBboxDataset(Dataset):
         
         text =  torch.tensor(self.tokenizer([caption.lower()], max_length=self.max_length, padding="max_length", truncation=True).input_ids, dtype=torch.long)
         short_text = None
-        if self.use_short_caption:
+        if self.use_short_caption_contrastive_loss:
             short_text = torch.tensor(self.tokenizer([caption_short.lower()], max_length=self.base_length, padding="max_length", truncation=True).input_ids, dtype=torch.long)
         tensor_device = text.device
 
@@ -758,6 +760,24 @@ class LazySupervisedBboxDataset(Dataset):
             data_dict['llm_attention_mask'] = llm_attention_mask
             data_dict['caption_labels'] = labels.unsqueeze(0)  # [1, L]
 
+        if self.use_short_caption_llm_loss and self.llm_tokenizer is not None:
+            short_llm_enc = self.llm_tokenizer(
+                caption_short.lower(),
+                max_length=self.base_length,
+                padding="max_length",
+                truncation=True,
+                return_tensors="pt",
+            )
+            short_llm_input_ids = short_llm_enc.input_ids
+            short_llm_attention_mask = short_llm_enc.attention_mask
+            short_labels = short_llm_input_ids[0, 1:].clone()
+            short_labels = torch.cat([short_labels, torch.tensor([-100], dtype=short_labels.dtype)])
+            short_pad_mask = short_llm_attention_mask[0, 1:] == 0
+            short_labels[:-1][short_pad_mask] = -100
+            data_dict['short_llm_input_ids'] = short_llm_input_ids
+            data_dict['short_llm_attention_mask'] = short_llm_attention_mask
+            data_dict['short_caption_labels'] = short_labels.unsqueeze(0)
+
         if self.add_box_loss:
             # data_dict['box_images'] = box_images
             data_dict['box_texts'] = box_texts
@@ -878,6 +898,10 @@ class DataCollatorForSupervisedDataset(object):
             batch['caption_labels'] = torch.cat([instance['caption_labels'] for instance in instances], dim=0)
             batch['llm_input_ids'] = torch.cat([instance['llm_input_ids'] for instance in instances], dim=0)
             batch['llm_attention_mask'] = torch.cat([instance['llm_attention_mask'] for instance in instances], dim=0)
+        if 'short_caption_labels' in instances[0]:
+            batch['short_caption_labels'] = torch.cat([instance['short_caption_labels'] for instance in instances], dim=0)
+            batch['short_llm_input_ids'] = torch.cat([instance['short_llm_input_ids'] for instance in instances], dim=0)
+            batch['short_llm_attention_mask'] = torch.cat([instance['short_llm_attention_mask'] for instance in instances], dim=0)
 
         return batch
 
@@ -951,9 +975,12 @@ def train():
     model.loss_type = model_args.loss_type
     model.long_loss_weight = data_args.long_loss_weight
     model.caption_loss_weight = data_args.caption_loss_weight
+    model.short_caption_loss_weight = data_args.short_caption_loss_weight
 
     llm_tokenizer = None
-    if data_args.llm_model_path is not None and data_args.caption_loss_weight > 0.0:
+    if data_args.llm_model_path is not None and (
+        data_args.caption_loss_weight > 0.0 or data_args.short_caption_loss_weight > 0.0
+    ):
         from fgclip2.model.strcs.caption_decoder import LLMCaptionDecoder
         llm_caption_decoder = LLMCaptionDecoder(
             vis_hidden_dim=model.config.vision_config.hidden_size,
@@ -978,7 +1005,7 @@ def train():
             configure_projector_only_training(model)
             model.train_projector_only = True
             print("[DEBUG] train_projector_only enabled")
-    print(f"[DEBUG] caption_loss_weight={data_args.caption_loss_weight}, llm_model_path={data_args.llm_model_path}")
+    print(f"[DEBUG] caption_loss_weight={data_args.caption_loss_weight}, short_caption_loss_weight={data_args.short_caption_loss_weight}, llm_model_path={data_args.llm_model_path}")
 
     data_module = make_supervised_data_module(data_args=data_args, img_preprocess=image_processor, tokenizer=tokenizer, llm_tokenizer=llm_tokenizer, is_naflex=training_args.naflex_train)
     

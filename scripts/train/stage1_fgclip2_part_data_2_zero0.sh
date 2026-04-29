@@ -32,7 +32,7 @@ TRAIN_WORLD_SIZE="${TRAIN_WORLD_SIZE:-$((NUM_NODES * NUM_GPUS_PER_NODE))}"
 MAX_NUM_PATCHES="${MAX_NUM_PATCHES:-1024}"
 ADD_BOX_LOSS="${ADD_BOX_LOSS:-False}"
 USE_HARD_NEG="${USE_HARD_NEG:-False}"
-USE_SHORT_CAPTION="${USE_SHORT_CAPTION:-True}"
+USE_SHORT_CAPTION_CONTRASTIVE_LOSS="${USE_SHORT_CAPTION_CONTRASTIVE_LOSS:-True}"
 PER_DEVICE_TRAIN_BATCH_SIZE="${PER_DEVICE_TRAIN_BATCH_SIZE:-256}"
 PER_DEVICE_EVAL_BATCH_SIZE="${PER_DEVICE_EVAL_BATCH_SIZE:-4}"
 GRADIENT_ACCUMULATION_STEPS="${GRADIENT_ACCUMULATION_STEPS:-1}"
@@ -95,7 +95,7 @@ deepspeed \
     --box_image_size 512 \
     --base_seq_length 64 \
     --max_seq_length 196 \
-    --use_short_caption "$USE_SHORT_CAPTION" \
+    --use_short_caption_contrastive_loss "$USE_SHORT_CAPTION_CONTRASTIVE_LOSS" \
     --save_safetensors True \
     --bf16 True \
     --per_device_train_batch_size "$PER_DEVICE_TRAIN_BATCH_SIZE" \

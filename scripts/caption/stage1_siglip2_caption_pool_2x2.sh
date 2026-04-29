@@ -20,9 +20,10 @@ PT_SAMPLE_PATH="$DATA_WORK_DIR/pt_llava-ov-mid-v1_sample1M_cleaned.jsonl"
 DATA_PATH="${DATA_PATH:-$DATA_WORK_DIR/stage1_longonly_2M_cleaned_manifest.txt}"
 IMG_ROOT="${IMG_ROOT:-$DATA_ROOT/data}"
 LOG_DIR="${LOG_DIR:-$ROOT/output/stage1_siglip2_caption_pool_2x2}"
-USE_SHORT_CAPTION="${USE_SHORT_CAPTION:-False}"
+USE_SHORT_CAPTION_CONTRASTIVE_LOSS="${USE_SHORT_CAPTION_CONTRASTIVE_LOSS:-False}"
 MAX_IMAGE_PIXELS="${MAX_IMAGE_PIXELS:-50000000}"
-RUN_NAME="${RUN_NAME:-stage1_siglip2_caption_pool2x2_longonly_2M_cleaned_bs256_lr1e-6_proj1e-5_cap1.0_short${USE_SHORT_CAPTION}_$(date +%Y%m%d_%H%M%S)}"
+SHORT_CAPTION_LOSS_WEIGHT="${SHORT_CAPTION_LOSS_WEIGHT:-0.5}"
+RUN_NAME="${RUN_NAME:-stage1_siglip2_caption_pool2x2_longonly_2M_cleaned_bs256_lr1e-6_proj1e-5_cap1.0_short${USE_SHORT_CAPTION_CONTRASTIVE_LOSS}_$(date +%Y%m%d_%H%M%S)}"
 
 mkdir -p "$LOG_DIR"
 mkdir -p "$DATA_WORK_DIR"
@@ -35,7 +36,8 @@ echo "Training log: $TRAIN_LOG"
 echo "Started at: $(date)"
 echo "ROOT=$ROOT"
 echo "LOG_DIR=$LOG_DIR"
-echo "USE_SHORT_CAPTION=$USE_SHORT_CAPTION"
+echo "USE_SHORT_CAPTION_CONTRASTIVE_LOSS=$USE_SHORT_CAPTION_CONTRASTIVE_LOSS"
+echo "SHORT_CAPTION_LOSS_WEIGHT=$SHORT_CAPTION_LOSS_WEIGHT"
 echo "MAX_IMAGE_PIXELS=$MAX_IMAGE_PIXELS"
 echo "WANDB_PROJECT=$WANDB_PROJECT"
 echo "WANDB_MODE=$WANDB_MODE"
@@ -83,7 +85,7 @@ deepspeed fgclip2/train/train.py \
     --box_image_size 512 \
     --base_seq_length 64 \
     --max_seq_length 196 \
-    --use_short_caption "$USE_SHORT_CAPTION" \
+    --use_short_caption_contrastive_loss "$USE_SHORT_CAPTION_CONTRASTIVE_LOSS" \
     --save_safetensors True \
     --bf16 True \
     --per_device_train_batch_size 32 \
@@ -108,6 +110,7 @@ deepspeed fgclip2/train/train.py \
     --report_to "wandb" \
     --run_name "$RUN_NAME" \
     --caption_loss_weight 1.0 \
+    --short_caption_loss_weight "$SHORT_CAPTION_LOSS_WEIGHT" \
     --llm_model_path "$LLM_MODEL_PATH" \
     --llm_gradient_checkpointing True \
     --projector_lr 1e-5 \

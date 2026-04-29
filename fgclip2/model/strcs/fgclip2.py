@@ -96,6 +96,7 @@ class FG_CLIP2_Model(Fgclip2Model):
         self.loss_type = None
         self.long_loss_weight = 1.0
         self.caption_loss_weight = 0.0
+        self.short_caption_loss_weight = 0.0
         self.llm_caption_decoder = None
 
         
@@ -319,6 +320,9 @@ class FG_CLIP2_Model(Fgclip2Model):
         caption_labels: Optional[torch.LongTensor] = None,
         llm_input_ids: Optional[torch.LongTensor] = None,
         llm_attention_mask: Optional[torch.Tensor] = None,
+        short_caption_labels: Optional[torch.LongTensor] = None,
+        short_llm_input_ids: Optional[torch.LongTensor] = None,
+        short_llm_attention_mask: Optional[torch.Tensor] = None,
     ) -> Union[Tuple, Fgclip2Output]:
 
         # Use CLIP model's config for some fields (if specified) instead of those of vision & text components.
@@ -483,6 +487,7 @@ class FG_CLIP2_Model(Fgclip2Model):
         loss_long = None
         loss_short = None
         loss_caption = None
+        loss_caption_short = None
         loss_bbox_itcl = None
         loss_bbox_rcc = None
         loss_bbox_hitc = None
@@ -517,6 +522,21 @@ class FG_CLIP2_Model(Fgclip2Model):
                     ignore_index=-100,
                 )
                 loss = loss + self.caption_loss_weight * loss_caption
+            if self.short_caption_loss_weight > 0.0 and self.llm_caption_decoder is not None and short_caption_labels is not None:
+                short_caption_logits, short_visual_token_count = self.llm_caption_decoder(
+                    image_patch_tokens=vision_outputs.last_hidden_state,
+                    pixel_attention_mask=pixel_attention_mask,
+                    spatial_shapes=spatial_shapes,
+                    llm_input_ids=short_llm_input_ids,
+                    llm_attention_mask=short_llm_attention_mask,
+                )
+                short_text_logits = get_caption_text_logits(short_caption_logits, short_visual_token_count)
+                loss_caption_short = F.cross_entropy(
+                    short_text_logits.reshape(-1, short_text_logits.shape[-1]),
+                    short_caption_labels.reshape(-1),
+                    ignore_index=-100,
+                )
+                loss = loss + self.short_caption_loss_weight * loss_caption_short
         else:
             loss = combine_available_losses(loss_short, None)
             return Fgclip2Output(
@@ -581,6 +601,7 @@ class FG_CLIP2_Model(Fgclip2Model):
             loss=loss,
             loss_dict={
                 "loss_caption": loss_caption,
+                "loss_caption_short": loss_caption_short,
                 "loss_long": loss_long,
                 "loss_short": loss_short,
                 "loss_bbox_itcl": loss_bbox_itcl,
