@@ -113,6 +113,8 @@ deepspeed \
     --max_image_pixels "$MAX_IMAGE_PIXELS" \
     --cn_and_en_2_train False \
     --loss_type reduce \
+    --long_loss_weight "${LONG_LOSS_WEIGHT:-1.0}" \
+    --short_loss_weight "${SHORT_LOSS_WEIGHT:-1.0}" \
     --from_siglip2 True \
     --naflex_train True \
     --max_num_patches "$MAX_NUM_PATCHES" \

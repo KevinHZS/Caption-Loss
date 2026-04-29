@@ -95,7 +95,8 @@ class FG_CLIP2_Model(Fgclip2Model):
         self.world_size = 0
         self.loss_type = None
         self.long_loss_weight = 1.0
-        self.caption_loss_weight = 0.0
+        self.short_loss_weight = 1.0
+        self.long_caption_loss_weight = 0.0
         self.short_caption_loss_weight = 0.0
         self.llm_caption_decoder = None
 
@@ -506,8 +507,13 @@ class FG_CLIP2_Model(Fgclip2Model):
 
 
         if text_long is not None:
-            loss = combine_available_losses(loss_short, loss_long, long_loss_weight=self.long_loss_weight)
-            if self.caption_loss_weight > 0.0 and self.llm_caption_decoder is not None and caption_labels is not None:
+            loss = combine_available_losses(
+                loss_short,
+                loss_long,
+                long_loss_weight=self.long_loss_weight,
+                short_loss_weight=self.short_loss_weight,
+            )
+            if self.long_caption_loss_weight > 0.0 and self.llm_caption_decoder is not None and caption_labels is not None:
                 caption_logits, visual_token_count = self.llm_caption_decoder(
                     image_patch_tokens=vision_outputs.last_hidden_state,
                     pixel_attention_mask=pixel_attention_mask,
@@ -521,7 +527,7 @@ class FG_CLIP2_Model(Fgclip2Model):
                     caption_labels.reshape(-1),
                     ignore_index=-100,
                 )
-                loss = loss + self.caption_loss_weight * loss_caption
+                loss = loss + self.long_caption_loss_weight * loss_caption
             if self.short_caption_loss_weight > 0.0 and self.llm_caption_decoder is not None and short_caption_labels is not None:
                 short_caption_logits, short_visual_token_count = self.llm_caption_decoder(
                     image_patch_tokens=vision_outputs.last_hidden_state,
@@ -538,7 +544,7 @@ class FG_CLIP2_Model(Fgclip2Model):
                 )
                 loss = loss + self.short_caption_loss_weight * loss_caption_short
         else:
-            loss = combine_available_losses(loss_short, None)
+            loss = combine_available_losses(loss_short, None, short_loss_weight=self.short_loss_weight)
             return Fgclip2Output(
                 loss=loss,
                 loss_dict={

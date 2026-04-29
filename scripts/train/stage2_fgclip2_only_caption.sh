@@ -10,6 +10,7 @@ MODEL_DIR="/gemini/space/gjx/FG-CLIP/models--qihoo360--fg-clip2-base"
 DATA_PATH="/gemini/space/gjx/FG-CLIP/data/FineHARD/debug_coyo0_00000_exact_small.json"
 IMG_ROOT="/gemini/space/gjx/FG-CLIP/data"
 LOG_DIR="$ROOT/output/smoke_debug_8gpu_all_checkgpu_bs512_patch1024"
+LONG_CAPTION_LOSS_WEIGHT="${LONG_CAPTION_LOSS_WEIGHT:-1.0}"
 
 mkdir -p "$LOG_DIR"
 cd "$ROOT"
@@ -30,6 +31,8 @@ deepspeed fgclip2/train/train.py \
     --image_folder "$IMG_ROOT" \
     --cn_and_en_2_train False \
     --loss_type reduce \
+    --long_loss_weight "${LONG_LOSS_WEIGHT:-1.0}" \
+    --short_loss_weight "${SHORT_LOSS_WEIGHT:-1.0}" \
     --from_siglip2 False \
     --naflex_train True \
     --max_num_patches 1024 \
@@ -62,7 +65,7 @@ deepspeed fgclip2/train/train.py \
     --dataloader_pin_memory True \
     --lazy_preprocess True \
     --report_to "none" \
-    --caption_loss_weight 1.0 \
+    --long_caption_loss_weight "$LONG_CAPTION_LOSS_WEIGHT" \
     --llm_model_path $LLM_MODEL_PATH \
     --llm_gradient_checkpointing True \
 

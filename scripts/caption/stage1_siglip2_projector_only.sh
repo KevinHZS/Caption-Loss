@@ -22,6 +22,7 @@ IMG_ROOT="${IMG_ROOT:-$DATA_ROOT/data}"
 LOG_DIR="${LOG_DIR:-$ROOT/output/stage1_siglip2_projector_only}"
 USE_SHORT_CAPTION_CONTRASTIVE_LOSS="${USE_SHORT_CAPTION_CONTRASTIVE_LOSS:-False}"
 MAX_IMAGE_PIXELS="${MAX_IMAGE_PIXELS:-50000000}"
+LONG_CAPTION_LOSS_WEIGHT="${LONG_CAPTION_LOSS_WEIGHT:-1.0}"
 SHORT_CAPTION_LOSS_WEIGHT="${SHORT_CAPTION_LOSS_WEIGHT:-0.5}"
 RUN_NAME="${RUN_NAME:-stage1_siglip2_projector_only_bs256_lr1e-6_proj1e-5_cap1.0_short${USE_SHORT_CAPTION_CONTRASTIVE_LOSS}_$(date +%Y%m%d_%H%M%S)}"
 
@@ -37,6 +38,7 @@ echo "Started at: $(date)"
 echo "ROOT=$ROOT"
 echo "LOG_DIR=$LOG_DIR"
 echo "USE_SHORT_CAPTION_CONTRASTIVE_LOSS=$USE_SHORT_CAPTION_CONTRASTIVE_LOSS"
+echo "LONG_CAPTION_LOSS_WEIGHT=$LONG_CAPTION_LOSS_WEIGHT"
 echo "SHORT_CAPTION_LOSS_WEIGHT=$SHORT_CAPTION_LOSS_WEIGHT"
 echo "MAX_IMAGE_PIXELS=$MAX_IMAGE_PIXELS"
 echo "WANDB_PROJECT=$WANDB_PROJECT"
@@ -75,6 +77,8 @@ deepspeed fgclip2/train/train.py \
     --max_image_pixels "$MAX_IMAGE_PIXELS" \
     --cn_and_en_2_train False \
     --loss_type reduce \
+    --long_loss_weight "${LONG_LOSS_WEIGHT:-1.0}" \
+    --short_loss_weight "${SHORT_LOSS_WEIGHT:-1.0}" \
     --from_siglip2 True \
     --naflex_train True \
     --max_num_patches 1024 \
@@ -109,7 +113,7 @@ deepspeed fgclip2/train/train.py \
     --lazy_preprocess True \
     --report_to "wandb" \
     --run_name "$RUN_NAME" \
-    --caption_loss_weight 1.0 \
+    --long_caption_loss_weight "$LONG_CAPTION_LOSS_WEIGHT" \
     --short_caption_loss_weight "$SHORT_CAPTION_LOSS_WEIGHT" \
     --llm_model_path "$LLM_MODEL_PATH" \
     --llm_gradient_checkpointing True \
