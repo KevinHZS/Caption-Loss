@@ -14,17 +14,17 @@ LLM_MODEL_PATH="/gemini/space/zyf/models/Qwen/Qwen3-1.7B"
 ROOT="/gemini/space/zyf/FG-CLIP"
 DATA_ROOT="/gemini/space/gjx/FG-CLIP"
 MODEL_DIR="$DATA_ROOT/siglip2-so400m-patch16-naflex"
-DATA_WORK_DIR="$DATA_ROOT/data/TeleMM"
-DENSE_SOURCE="$DATA_WORK_DIR/DenseFusion-1M_cleaned.jsonl"
-PT_SAMPLE_PATH="$DATA_WORK_DIR/pt_llava-ov-mid-v1_sample1M_cleaned.jsonl"
-DATA_PATH="${DATA_PATH:-$DATA_WORK_DIR/stage1_longonly_2M_cleaned_manifest.txt}"
-IMG_ROOT="${IMG_ROOT:-$DATA_ROOT/data}"
+# DATA_WORK_DIR="$DATA_ROOT/data/TeleMM"
+# DENSE_SOURCE="$DATA_WORK_DIR/DenseFusion-1M_cleaned.jsonl"
+# PT_SAMPLE_PATH="$DATA_WORK_DIR/pt_llava-ov-mid-v1_sample1M_cleaned.jsonl"
+DATA_PATH="/gemini/space/zyf/FG-CLIP/data/FineHARD/output.json"
+IMG_ROOT="/gemini/space/FG-CLIP/data"
 LOG_DIR="${LOG_DIR:-$ROOT/output/stage1_siglip2_projector_only}"
 USE_SHORT_CAPTION_CONTRASTIVE_LOSS="${USE_SHORT_CAPTION_CONTRASTIVE_LOSS:-False}"
 MAX_IMAGE_PIXELS="${MAX_IMAGE_PIXELS:-50000000}"
 LONG_CAPTION_LOSS_WEIGHT="${LONG_CAPTION_LOSS_WEIGHT:-1.0}"
 SHORT_CAPTION_LOSS_WEIGHT="${SHORT_CAPTION_LOSS_WEIGHT:-0.5}"
-RUN_NAME="${RUN_NAME:-stage1_siglip2_projector_only_bs256_lr1e-6_proj1e-5_cap1.0_short${USE_SHORT_CAPTION_CONTRASTIVE_LOSS}_$(date +%Y%m%d_%H%M%S)}"
+RUN_NAME="${RUN_NAME:-stage1_siglip2_projector_only_bs1152_lr1e-6_proj1e-5_cap1.0_short${USE_SHORT_CAPTION_CONTRASTIVE_LOSS}_$(date +%Y%m%d_%H%M%S)}"
 
 mkdir -p "$LOG_DIR"
 mkdir -p "$DATA_WORK_DIR"
@@ -45,9 +45,13 @@ echo "WANDB_PROJECT=$WANDB_PROJECT"
 echo "WANDB_MODE=$WANDB_MODE"
 echo "RUN_NAME=$RUN_NAME"
 
-printf "%s\n%s\n" "$DENSE_SOURCE" "$PT_SAMPLE_PATH" > "$DATA_PATH"
-echo "Manifest:"
-cat "$DATA_PATH"
+if [[ "$DATA_PATH" == *.txt ]]; then
+      printf "%s\n%s\n" "$DENSE_SOURCE" "$PT_SAMPLE_PATH" > "$DATA_PATH"
+      echo "Manifest:"
+      cat "$DATA_PATH"
+else
+      echo "Using JSON data file directly: $DATA_PATH"
+fi
 
 nvidia-smi \
   --query-gpu=timestamp,index,utilization.gpu,utilization.memory,memory.used,memory.total,power.draw \

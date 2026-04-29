@@ -47,10 +47,13 @@ echo "WANDB_PROJECT=$WANDB_PROJECT"
 echo "WANDB_MODE=$WANDB_MODE"
 echo "RUN_NAME=$RUN_NAME"
 
-printf "%s\n%s\n" "$DENSE_SOURCE" "$PT_SAMPLE_PATH" > "$DATA_PATH"
-# DATA_PATH="/gemini/space/gjx/FG-CLIP/data/FineHARD/debug_coyo0_00000_exact_small.json"
-echo "Manifest:"
-cat "$DATA_PATH"
+if [[ "$DATA_PATH" == *.txt ]]; then
+      printf "%s\n%s\n" "$DENSE_SOURCE" "$PT_SAMPLE_PATH" > "$DATA_PATH"
+      echo "Manifest:"
+      cat "$DATA_PATH"
+else
+      echo "Using JSON data file directly: $DATA_PATH"
+fi
 
 nvidia-smi \
   --query-gpu=timestamp,index,utilization.gpu,utilization.memory,memory.used,memory.total,power.draw \
