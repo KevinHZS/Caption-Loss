@@ -14,21 +14,19 @@ LLM_MODEL_PATH="/gemini/space/zyf/models/Qwen/Qwen3-1.7B"
 ROOT="/gemini/space/zyf/FG-CLIP"
 DATA_ROOT="/gemini/space/gjx/FG-CLIP"
 MODEL_DIR="$DATA_ROOT/siglip2-so400m-patch16-naflex"
-DATA_WORK_DIR="$DATA_ROOT/data/TeleMM"
-DENSE_SOURCE="$DATA_WORK_DIR/DenseFusion-1M_cleaned.jsonl"
-PT_SAMPLE_PATH="$DATA_WORK_DIR/pt_llava-ov-mid-v1_sample1M_cleaned.jsonl"
-DATA_PATH="${DATA_PATH:-$DATA_WORK_DIR/stage1_longonly_2M_cleaned_manifest.txt}"
-IMG_ROOT="${IMG_ROOT:-$DATA_ROOT/data}"
-PROJECTOR_DIR="/gemini/space/zyf/FG-CLIP/output/stage1_siglip2_projector_only_batchsize_1152/checkpoint-3480/projector"
-LOG_DIR="${LOG_DIR:-$ROOT/output/stage1_siglip2_projector_joint}"
-USE_SHORT_CAPTION_CONTRASTIVE_LOSS="${USE_SHORT_CAPTION_CONTRASTIVE_LOSS:-False}"
+# DATA_WORK_DIR="$DATA_ROOT/data/TeleMM"
+# DENSE_SOURCE="$DATA_WORK_DIR/DenseFusion-1M_cleaned.jsonl"
+# PT_SAMPLE_PATH="$DATA_WORK_DIR/pt_llava-ov-mid-v1_sample1M_cleaned.jsonl"
+DATA_PATH="/gemini/space/zyf/FG-CLIP/data/FineHARD/output.json"
+IMG_ROOT="/gemini/space/FG-CLIP/data"
+LOG_DIR="${LOG_DIR:-$ROOT/output/stage1_siglip2_projector_joint_finehard}"
+USE_SHORT_CAPTION_CONTRASTIVE_LOSS="True"
 MAX_IMAGE_PIXELS="${MAX_IMAGE_PIXELS:-50000000}"
 LONG_CAPTION_LOSS_WEIGHT="${LONG_CAPTION_LOSS_WEIGHT:-1.0}"
-SHORT_CAPTION_LOSS_WEIGHT="${SHORT_CAPTION_LOSS_WEIGHT:-0.5}"
-RUN_NAME="${RUN_NAME:-stage1_siglip2_projector_joint_bs256_lr1e-6_proj1e-5_cap1.0_short${USE_SHORT_CAPTION_CONTRASTIVE_LOSS}_$(date +%Y%m%d_%H%M%S)}"
+SHORT_CAPTION_LOSS_WEIGHT="${SHORT_CAPTION_LOSS_WEIGHT:-1.0}"
+RUN_NAME="${RUN_NAME:-stage1_siglip2_projector_joint_bs18432_lr1e-6_proj1e-5_$(date +%Y%m%d_%H%M%S)}"
 
 mkdir -p "$LOG_DIR"
-mkdir -p "$DATA_WORK_DIR"
 cd "$ROOT"
 
 TRAIN_LOG="$LOG_DIR/train_$(date +%Y%m%d_%H%M%S).log"
@@ -38,7 +36,6 @@ echo "Training log: $TRAIN_LOG"
 echo "Started at: $(date)"
 echo "ROOT=$ROOT"
 echo "LOG_DIR=$LOG_DIR"
-echo "PROJECTOR_DIR=$PROJECTOR_DIR"
 echo "USE_SHORT_CAPTION_CONTRASTIVE_LOSS=$USE_SHORT_CAPTION_CONTRASTIVE_LOSS"
 echo "LONG_CAPTION_LOSS_WEIGHT=$LONG_CAPTION_LOSS_WEIGHT"
 echo "SHORT_CAPTION_LOSS_WEIGHT=$SHORT_CAPTION_LOSS_WEIGHT"
@@ -83,8 +80,8 @@ deepspeed fgclip2/train/train.py \
     --max_image_pixels "$MAX_IMAGE_PIXELS" \
     --cn_and_en_2_train False \
     --loss_type reduce \
-    --long_loss_weight "${LONG_LOSS_WEIGHT:-1.0}" \
-    --short_loss_weight "${SHORT_LOSS_WEIGHT:-1.0}" \
+    --long_loss_weight 1.0 \
+    --short_loss_weight 1.0 \
     --from_siglip2 True \
     --naflex_train True \
     --max_num_patches 1024 \
@@ -124,6 +121,4 @@ deepspeed fgclip2/train/train.py \
     --llm_model_path "$LLM_MODEL_PATH" \
     --llm_gradient_checkpointing True \
     --projector_lr 1e-5 \
-    --load_projector_from "$PROJECTOR_DIR" \
-    --freeze_projector True \
-    --long_loss_weight 0.0 \
+    --train_projector_only False \
