@@ -526,7 +526,7 @@ class LazySupervisedBboxDataset(Dataset):
         with open(self.missing_image_log_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-    def log_large_image(self, index, image_path, image_name, width, height):
+    def log_large_image(self, index, image_path, image_name, width=None, height=None, pixels=None, reason=None):
         if self.large_image_log_path is None:
             return
 
@@ -538,15 +538,18 @@ class LazySupervisedBboxDataset(Dataset):
         if log_dir:
             os.makedirs(log_dir, exist_ok=True)
 
+        logged_pixels = pixels if pixels is not None else (None if width is None or height is None else width * height)
         record = {
             "index": index,
             "image_path": image_path,
             "resolved_path": image_name,
             "width": width,
             "height": height,
-            "pixels": width * height,
+            "pixels": logged_pixels,
             "max_image_pixels": self.max_image_pixels,
         }
+        if reason is not None:
+            record["reason"] = reason
         with open(self.large_image_log_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
@@ -582,6 +585,9 @@ class LazySupervisedBboxDataset(Dataset):
                     image.close()
                     continue
                 image = image.convert("RGB")
+            except Image.DecompressionBombError as e:
+                self.log_large_image(cur_idx, image_path, image_name, pixels=None, reason=repr(e))
+                continue
             except (FileNotFoundError, OSError) as e:
                 self.log_missing_image(cur_idx, image_path, image_name, repr(e))
                 continue
