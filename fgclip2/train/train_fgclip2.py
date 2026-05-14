@@ -464,6 +464,8 @@ class LazySupervisedBboxDataset(Dataset):
         self.missing_image_log_path = data_args.missing_image_log_path
         self.large_image_log_path = data_args.large_image_log_path
         self.max_image_pixels = data_args.max_image_pixels
+        if self.max_image_pixels is not None and self.max_image_pixels > 0:
+            Image.MAX_IMAGE_PIXELS = None
         self.logged_missing_images = set()
         self.logged_large_images = set()
 

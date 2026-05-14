@@ -361,6 +361,7 @@ class FG_CLIP2_Model(Fgclip2Model):
             short_text_embeds = short_text_embeds / short_text_embeds.norm(p=2, dim=-1, keepdim=True)
 
 
+        long_text_embeds = None
         if text_long is not None:
             long_text_outputs = self.text_model(
                     input_ids=text_long,
@@ -492,27 +493,46 @@ class FG_CLIP2_Model(Fgclip2Model):
         loss_bbox_itcl = None
         loss_bbox_rcc = None
         loss_bbox_hitc = None
+
+        def _synced_loss(text_features, has_local, loss_fn):
+            """Ensure all ranks participate in collectives even when local data is None.
+
+            Without this sync, ranks with valid data call all_reduce/all_gather
+            while ranks without data skip them, causing NCCL deadlock.
+            """
+            has_t = torch.tensor(
+                [1.0 if has_local else 0.0],
+                device=image_embeds.device, dtype=torch.float32,
+            )
+            torch.distributed.all_reduce(has_t, op=torch.distributed.ReduceOp.MAX)
+            if has_t.item() <= 0.5:
+                return None
+            valid = torch.zeros(self.world_size, device=image_embeds.device, dtype=torch.float32)
+            valid[rank] = 1.0 if has_local else 0.0
+            torch.distributed.all_reduce(valid, op=torch.distributed.ReduceOp.SUM)
+            valid_mask = valid.bool().tolist()
+            txt = text_features if has_local else torch.zeros_like(image_embeds)
+            return loss_fn(
+                image_embeds, txt, logit_scale, logit_bias, rank,
+                valid_mask=valid_mask,
+            )
+
         if self.loss_type == "gather":
-            if text_long is not None:
-                loss_long = self.all_gather_siglip_loss_(image_embeds,long_text_embeds,logit_scale,logit_bias,rank)
-            if short_text_embeds is not None:
-                loss_short = self.all_gather_siglip_loss_(image_embeds,short_text_embeds,logit_scale,logit_bias,rank)
+            loss_long = _synced_loss(long_text_embeds, text_long is not None, self.all_gather_siglip_loss_)
+            loss_short = _synced_loss(short_text_embeds, short_text_embeds is not None, self.all_gather_siglip_loss_)
         elif self.loss_type == "reduce":
-            if text_long is not None:
-                loss_long = self.all_reduce_siglip_loss(image_embeds,long_text_embeds,logit_scale,logit_bias,rank)
-            if short_text_embeds is not None:
-                loss_short = self.all_reduce_siglip_loss(image_embeds,short_text_embeds,logit_scale,logit_bias,rank)
+            loss_long = _synced_loss(long_text_embeds, text_long is not None, self.all_reduce_siglip_loss)
+            loss_short = _synced_loss(short_text_embeds, short_text_embeds is not None, self.all_reduce_siglip_loss)
         else:
             assert self.loss_type is not None
 
-
+        loss = combine_available_losses(
+            loss_short,
+            loss_long,
+            long_loss_weight=self.long_loss_weight,
+            short_loss_weight=self.short_loss_weight,
+        )
         if text_long is not None:
-            loss = combine_available_losses(
-                loss_short,
-                loss_long,
-                long_loss_weight=self.long_loss_weight,
-                short_loss_weight=self.short_loss_weight,
-            )
             if self.long_caption_loss_weight > 0.0 and self.llm_caption_decoder is not None and caption_labels is not None:
                 caption_logits, visual_token_count = self.llm_caption_decoder(
                     image_patch_tokens=vision_outputs.last_hidden_state,
@@ -521,7 +541,7 @@ class FG_CLIP2_Model(Fgclip2Model):
                     llm_input_ids=llm_input_ids,
                     llm_attention_mask=llm_attention_mask,
                 )
-                text_logits = get_caption_text_logits(caption_logits, visual_token_count)  # [B, L, vocab_size]
+                text_logits = get_caption_text_logits(caption_logits, visual_token_count)
                 loss_caption = F.cross_entropy(
                     text_logits.reshape(-1, text_logits.shape[-1]),
                     caption_labels.reshape(-1),
@@ -543,14 +563,6 @@ class FG_CLIP2_Model(Fgclip2Model):
                     ignore_index=-100,
                 )
                 loss = loss + self.short_caption_loss_weight * loss_caption_short
-        else:
-            loss = combine_available_losses(loss_short, None, short_loss_weight=self.short_loss_weight)
-            return Fgclip2Output(
-                loss=loss,
-                loss_dict={
-                    "loss_short": loss_short,
-                },
-            )
 
 
         try:
@@ -733,12 +745,14 @@ class FG_CLIP2_Model(Fgclip2Model):
         return loss
 
 
-    def all_gather_siglip_loss_(self, image_features, text_features, logit_scale, logit_bias, cur_rank, output_dict=False):
+    def all_gather_siglip_loss_(self, image_features, text_features, logit_scale, logit_bias, cur_rank, output_dict=False, valid_mask=None):
         loss = self._loss(image_features, text_features, logit_scale, logit_bias)
 
         text_features_all = torch.stack(nn_dist.all_gather(text_features), dim=0)
 
         for i in range(self.world_size):
+            if valid_mask is not None and not valid_mask[i]:
+                continue
             loss += float(i != cur_rank) * self._loss(
                 image_features,
                 text_features_all[i],
@@ -750,8 +764,8 @@ class FG_CLIP2_Model(Fgclip2Model):
         return loss
 
 
-    def all_reduce_siglip_loss(self, image_features, text_features, logit_scale, logit_bias, cur_rank, no_longtext_indices=None, output_dict=False):
-        
+    def all_reduce_siglip_loss(self, image_features, text_features, logit_scale, logit_bias, cur_rank, no_longtext_indices=None, output_dict=False, valid_mask=None):
+
         loss = self._loss(image_features, text_features, logit_scale, logit_bias)
 
 
@@ -762,6 +776,8 @@ class FG_CLIP2_Model(Fgclip2Model):
                 torch.distributed.ReduceOp.SUM,
             )
 
+            if valid_mask is not None and not valid_mask[i]:
+                continue
             loss += float(i != cur_rank) * self._loss(
                 image_features,
                 text_from_other,
