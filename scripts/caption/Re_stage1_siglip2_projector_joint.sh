@@ -20,11 +20,11 @@ MODEL_DIR="$DATA_ROOT/siglip2-so400m-patch16-naflex"
 # DATA_WORK_DIR="$DATA_ROOT/data/TeleMM"
 # DENSE_SOURCE="$DATA_WORK_DIR/DenseFusion-1M_cleaned.jsonl"
 # PT_SAMPLE_PATH="$DATA_WORK_DIR/pt_llava-ov-mid-v1_sample1M_cleaned.jsonl"
-DATA_PATH="/gemini/space/zyf/FG-CLIP/data/FineHARD/output.json"
+DATA_PATH="/gemini/space/zyf/FG-CLIP/data/FineHARD/output.jsonl"
 IMG_ROOT="/gemini/space/FG-CLIP/data"
-LOG_DIR="${LOG_DIR:-$ROOT/output/Re5_stage1_siglip2_projector_joint_finehard}"
+LOG_DIR="${LOG_DIR:-$ROOT/output/Re8_stage1_siglip2_projector_joint_finehard}"
 USE_SHORT_CAPTION_CONTRASTIVE_LOSS="True"
-MAX_IMAGE_PIXELS="${MAX_IMAGE_PIXELS:-20000000}"
+MAX_IMAGE_PIXELS="${MAX_IMAGE_PIXELS:-50000000}"
 LONG_CAPTION_LOSS_WEIGHT="${LONG_CAPTION_LOSS_WEIGHT:-1.0}"
 SHORT_CAPTION_LOSS_WEIGHT="${SHORT_CAPTION_LOSS_WEIGHT:-1.0}"
 RUN_NAME="${RUN_NAME:-stage1_siglip2_projector_joint_bs18432_lr1e-6_proj1e-5_$(date +%Y%m%d_%H%M%S)}"
@@ -98,7 +98,7 @@ deepspeed fgclip2/train/train.py \
     --use_short_caption_contrastive_loss "$USE_SHORT_CAPTION_CONTRASTIVE_LOSS" \
     --save_safetensors True \
     --bf16 True \
-    --per_device_train_batch_size 42 \
+    --per_device_train_batch_size 48 \
     --per_device_eval_batch_size 4 \
     --gradient_accumulation_steps 54 \
     --num_train_epochs 1 \
