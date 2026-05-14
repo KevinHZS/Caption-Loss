@@ -223,9 +223,9 @@ class JsonlOffsetStore:
     ):
         self.data_file = data_file
         self.offsets = array("Q")
-        self._fp = None
+        # ✅ 已移除 self._fp，不再缓存文件句柄
         self.index_file = index_file
-
+        
         if index_file is not None and os.path.exists(index_file):
             with open(index_file, "rb") as f:
                 self.offsets.fromfile(f, os.path.getsize(index_file) // self.offsets.itemsize)
@@ -237,7 +237,6 @@ class JsonlOffsetStore:
 
         rng = random.Random(sample_seed) if sample_seed is not None else None
         record_count = 0
-
         with open(data_file, "rb") as f:
             while True:
                 offset = f.tell()
@@ -278,23 +277,21 @@ class JsonlOffsetStore:
 
     def __getstate__(self):
         state = self.__dict__.copy()
-        state["_fp"] = None
+        state.pop("_fp", None)  # 兼容旧版本 pickle
         return state
 
-    def _file(self):
-        if self._fp is None:
-            self._fp = open(self.data_file, "rb")
-        return self._fp
+    # ✅ 已删除原 _file() 方法
 
     def __getitem__(self, index):
         if index < 0:
             index += len(self.offsets)
         if index < 0 or index >= len(self.offsets):
             raise IndexError(index)
-
-        f = self._file()
-        f.seek(self.offsets[index])
-        line = f.readline()
+        
+        # ✅ 核心修复：每次读取都重新打开，with 语法自动关闭，彻底杜绝 FD 泄漏
+        with open(self.data_file, "rb") as f:
+            f.seek(self.offsets[index])
+            line = f.readline()
         return json.loads(line.decode("utf-8"))
 
 
