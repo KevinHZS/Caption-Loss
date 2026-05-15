@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 set -o pipefail
 
-export NCCL_DEBUG=INFO                      # 打印详细通信日志，便于定位
-export NCCL_TIMEOUT=3600                    # 将超时从30分钟提高到1小时（单位秒）
-export NCCL_BLOCKING_WAIT=1                 # 让 NCCL 在超时时抛出更明确的错误
 export NCCL_IB_GID_INDEX=5
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export PYTHONPATH=/gemini/space/zyf/FG-CLIP:$PYTHONPATH
@@ -22,7 +19,7 @@ MODEL_DIR="$DATA_ROOT/siglip2-so400m-patch16-naflex"
 # PT_SAMPLE_PATH="$DATA_WORK_DIR/pt_llava-ov-mid-v1_sample1M_cleaned.jsonl"
 DATA_PATH="/gemini/space/zyf/FG-CLIP/data/FineHARD/output.jsonl"
 IMG_ROOT="/gemini/space/FG-CLIP/data"
-LOG_DIR="${LOG_DIR:-$ROOT/output/Re8_stage1_siglip2_projector_joint_finehard}"
+LOG_DIR="${LOG_DIR:-$ROOT/output/Re9_stage1_siglip2_projector_joint_finehard}"
 USE_SHORT_CAPTION_CONTRASTIVE_LOSS="True"
 MAX_IMAGE_PIXELS="${MAX_IMAGE_PIXELS:-50000000}"
 LONG_CAPTION_LOSS_WEIGHT="${LONG_CAPTION_LOSS_WEIGHT:-1.0}"
@@ -98,9 +95,9 @@ deepspeed fgclip2/train/train.py \
     --use_short_caption_contrastive_loss "$USE_SHORT_CAPTION_CONTRASTIVE_LOSS" \
     --save_safetensors True \
     --bf16 True \
-    --per_device_train_batch_size 48 \
+    --per_device_train_batch_size 8 \
     --per_device_eval_batch_size 4 \
-    --gradient_accumulation_steps 54 \
+    --gradient_accumulation_steps 284 \
     --num_train_epochs 1 \
     --save_strategy "steps" \
     --save_steps 10 \
