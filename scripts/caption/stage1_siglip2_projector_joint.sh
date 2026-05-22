@@ -19,12 +19,12 @@ MODEL_DIR="$DATA_ROOT/siglip2-so400m-patch16-naflex"
 # PT_SAMPLE_PATH="$DATA_WORK_DIR/pt_llava-ov-mid-v1_sample1M_cleaned.jsonl"
 DATA_PATH="/gemini/space/zyf/FG-CLIP/data/FineHARD/output.json"
 IMG_ROOT="/gemini/space/FG-CLIP/data"
-LOG_DIR="${LOG_DIR:-$ROOT/output/stage1_siglip2_projector_joint_finehard}"
+LOG_DIR="${LOG_DIR:-$ROOT/output/stage1_siglip2_projector_joint_finehard_fixed}"
 USE_SHORT_CAPTION_CONTRASTIVE_LOSS="True"
 MAX_IMAGE_PIXELS="${MAX_IMAGE_PIXELS:-50000000}"
 LONG_CAPTION_LOSS_WEIGHT="${LONG_CAPTION_LOSS_WEIGHT:-1.0}"
-SHORT_CAPTION_LOSS_WEIGHT="${SHORT_CAPTION_LOSS_WEIGHT:-1.0}"
-RUN_NAME="${RUN_NAME:-stage1_siglip2_projector_joint_bs18432_lr1e-6_proj1e-5_$(date +%Y%m%d_%H%M%S)}"
+SHORT_CAPTION_LOSS_WEIGHT="${SHORT_CAPTION_LOSS_WEIGHT:-0.0}"
+RUN_NAME="${RUN_NAME:-stage1_siglip2_projector_joint_bs3072_lr1e-6_proj1e-5_$(date +%Y%m%d_%H%M%S)}"
 
 mkdir -p "$LOG_DIR"
 cd "$ROOT"
@@ -80,7 +80,7 @@ deepspeed fgclip2/train/train.py \
     --max_image_pixels "$MAX_IMAGE_PIXELS" \
     --cn_and_en_2_train False \
     --loss_type reduce \
-    --long_loss_weight 1.0 \
+    --long_loss_weight 0.0 \
     --short_loss_weight 1.0 \
     --from_siglip2 True \
     --naflex_train True \
@@ -97,8 +97,8 @@ deepspeed fgclip2/train/train.py \
     --bf16 True \
     --per_device_train_batch_size 48 \
     --per_device_eval_batch_size 4 \
-    --gradient_accumulation_steps 48 \
-    --num_train_epochs 3 \
+    --gradient_accumulation_steps 8 \
+    --num_train_epochs 1 \
     --save_strategy "steps" \
     --save_steps 10 \
     --learning_rate 1e-6 \

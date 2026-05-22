@@ -17,6 +17,10 @@ import glob
 import transformers
 
 from torch.utils.data import Dataset
+from fgclip2.train.caption_label_utils import (
+    DEFAULT_LLM_CAPTION_PROMPT,
+    build_caption_lm_inputs,
+)
 from fgclip2.train.local_trainer import CLIPTrainer
 from fgclip2.train.projector_utils import configure_projector_only_training, freeze_projector, load_projector_from_path
 
@@ -114,6 +118,9 @@ class DataArguments:
     llm_model_path: Optional[str] = field(default=None)
     llm_gradient_checkpointing: bool = field(default=False)
     caption_pool_2x2_tokens: bool = field(default=False)
+    llm_caption_prompt: str = field(default=DEFAULT_LLM_CAPTION_PROMPT)
+    llm_use_chat_template: bool = field(default=True)
+    llm_enable_thinking: bool = field(default=False)
     train_projector_only: bool = field(default=False)
     freeze_projector: bool = field(default=False)
     load_projector_from: Optional[str] = field(default=None)
@@ -460,6 +467,9 @@ class LazySupervisedBboxDataset(Dataset):
         self.cn_image_root = data_args.cn_image_root
         self.long_caption_loss_weight = data_args.long_caption_loss_weight
         self.llm_tokenizer = llm_tokenizer
+        self.llm_caption_prompt = data_args.llm_caption_prompt
+        self.llm_use_chat_template = data_args.llm_use_chat_template
+        self.llm_enable_thinking = data_args.llm_enable_thinking
 
         self.missing_image_log_path = data_args.missing_image_log_path
         self.large_image_log_path = data_args.large_image_log_path
@@ -747,42 +757,30 @@ class LazySupervisedBboxDataset(Dataset):
         data_dict['is_cn'] = is_cn
 
         if self.long_caption_loss_weight > 0.0 and self.llm_tokenizer is not None:
-            llm_enc = self.llm_tokenizer(
-                caption.lower(),
+            llm_enc = build_caption_lm_inputs(
+                tokenizer=self.llm_tokenizer,
+                caption=caption,
                 max_length=self.max_length,
-                padding="max_length",
-                truncation=True,
-                return_tensors="pt",
+                prompt=self.llm_caption_prompt,
+                use_chat_template=self.llm_use_chat_template,
+                enable_thinking=self.llm_enable_thinking,
             )
-            llm_input_ids = llm_enc.input_ids          # [1, L]
-            llm_attention_mask = llm_enc.attention_mask  # [1, L]
-            # labels: shift left, mask pad positions with -100
-            labels = llm_input_ids[0, 1:].clone()
-            labels = torch.cat([labels, torch.tensor([-100], dtype=labels.dtype)])
-            # mask pad positions: attention_mask[1:] aligns with labels[:-1], last position is always -100
-            pad_mask = llm_attention_mask[0, 1:] == 0  # [L-1]
-            labels[:-1][pad_mask] = -100
-            data_dict['llm_input_ids'] = llm_input_ids
-            data_dict['llm_attention_mask'] = llm_attention_mask
-            data_dict['caption_labels'] = labels.unsqueeze(0)  # [1, L]
+            data_dict['llm_input_ids'] = llm_enc.input_ids
+            data_dict['llm_attention_mask'] = llm_enc.attention_mask
+            data_dict['caption_labels'] = llm_enc.labels
 
         if self.use_short_caption_llm_loss and self.llm_tokenizer is not None:
-            short_llm_enc = self.llm_tokenizer(
-                caption_short.lower(),
+            short_llm_enc = build_caption_lm_inputs(
+                tokenizer=self.llm_tokenizer,
+                caption=caption_short,
                 max_length=self.base_length,
-                padding="max_length",
-                truncation=True,
-                return_tensors="pt",
+                prompt=self.llm_caption_prompt,
+                use_chat_template=self.llm_use_chat_template,
+                enable_thinking=self.llm_enable_thinking,
             )
-            short_llm_input_ids = short_llm_enc.input_ids
-            short_llm_attention_mask = short_llm_enc.attention_mask
-            short_labels = short_llm_input_ids[0, 1:].clone()
-            short_labels = torch.cat([short_labels, torch.tensor([-100], dtype=short_labels.dtype)])
-            short_pad_mask = short_llm_attention_mask[0, 1:] == 0
-            short_labels[:-1][short_pad_mask] = -100
-            data_dict['short_llm_input_ids'] = short_llm_input_ids
-            data_dict['short_llm_attention_mask'] = short_llm_attention_mask
-            data_dict['short_caption_labels'] = short_labels.unsqueeze(0)
+            data_dict['short_llm_input_ids'] = short_llm_enc.input_ids
+            data_dict['short_llm_attention_mask'] = short_llm_enc.attention_mask
+            data_dict['short_caption_labels'] = short_llm_enc.labels
 
         if self.add_box_loss:
             # data_dict['box_images'] = box_images
