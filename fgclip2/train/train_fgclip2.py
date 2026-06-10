@@ -89,6 +89,10 @@ class ModelArguments:
     download_root: Optional[str] = field(default=None)
     log_scale: float = 4.6052
     loss_type: Optional[str] = field(default=None)
+    vision_use_2d_rope: bool = field(
+        default=False,
+        metadata={"help": "Whether to enable 2D RoPE in the vision encoder."},
+    )
 
 @dataclass
 class DataArguments:
@@ -179,6 +183,11 @@ class TrainingArguments(transformers.TrainingArguments):
     from_siglip2: bool = field(default=False)
     cn_and_en_2_train: bool = field(default=False)
     naflex_train: bool = field(default=False)
+
+
+def apply_vision_2d_rope_config(config: Fgclip2Config, enabled: bool) -> Fgclip2Config:
+    config.vision_config.vision_use_2d_rope = enabled
+    return config
 
 
 from datetime import datetime
@@ -952,6 +961,7 @@ def train():
         pass
 
     config = Fgclip2Config.from_pretrained(model_args.model_name_or_path)
+    config = apply_vision_2d_rope_config(config, model_args.vision_use_2d_rope)
     config.enable_region_heads = data_args.add_box_loss or data_args.use_hard_neg
     model = FG_CLIP2_Model.from_pretrained(model_args.model_name_or_path, config=config)
 

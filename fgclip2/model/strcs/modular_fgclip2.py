@@ -20,8 +20,11 @@ import torch.nn.functional as F
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 from torchvision.ops import roi_align
 
+from transformers.activations import ACT2FN
+from transformers.modeling_layers import GradientCheckpointingLayer
 from transformers.models.siglip2.configuration_siglip2 import Siglip2Config, Siglip2TextConfig, Siglip2VisionConfig
 from transformers.models.siglip2.modeling_siglip2 import (
+    ALL_ATTENTION_FUNCTIONS,
     BaseModelOutput,
     BaseModelOutputWithPooling,
     ImageClassifierOutput,
@@ -40,7 +43,9 @@ from transformers.models.siglip2.modeling_siglip2 import (
 )
 
 from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask
-from transformers.utils import auto_docstring, filter_out_non_signature_kwargs
+from transformers.processing_utils import Unpack
+from transformers.utils import TransformersKwargs, auto_docstring, can_return_tuple, filter_out_non_signature_kwargs
+from transformers.utils.generic import check_model_inputs
 
 
 class Fgclip2TextConfig(Siglip2TextConfig):
@@ -193,7 +198,34 @@ class Fgclip2VisionConfig(Siglip2VisionConfig):
     >>> # Accessing the model configuration
     >>> configuration = model.config
     ```"""
-    pass
+    def __init__(
+        self,
+        hidden_size=768,
+        intermediate_size=3072,
+        num_hidden_layers=12,
+        num_attention_heads=12,
+        num_channels=3,
+        num_patches=256,
+        patch_size=16,
+        hidden_act="gelu_pytorch_tanh",
+        layer_norm_eps=1e-6,
+        attention_dropout=0.0,
+        vision_use_2d_rope=False,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+
+        self.hidden_size = hidden_size
+        self.intermediate_size = intermediate_size
+        self.num_hidden_layers = num_hidden_layers
+        self.num_attention_heads = num_attention_heads
+        self.num_channels = num_channels
+        self.patch_size = patch_size
+        self.attention_dropout = attention_dropout
+        self.layer_norm_eps = layer_norm_eps
+        self.hidden_act = hidden_act
+        self.num_patches = num_patches
+        self.vision_use_2d_rope = vision_use_2d_rope
 
 
 class Fgclip2Config(Siglip2Config):
@@ -256,8 +288,343 @@ class Fgclip2VisionEmbeddings(Siglip2VisionEmbeddings):
     pass
 
 
-class Fgclip2VisionTransformer(Siglip2VisionTransformer):
-    pass
+def build_vision_position_ids(spatial_shape: torch.Tensor) -> torch.LongTensor:
+    """Build row/column position ids for a single vision sample."""
+
+    height = int(spatial_shape[0].item() if torch.is_tensor(spatial_shape[0]) else spatial_shape[0])
+    width = int(spatial_shape[1].item() if torch.is_tensor(spatial_shape[1]) else spatial_shape[1])
+
+    hpos_ids = torch.arange(height, dtype=torch.long).unsqueeze(1).expand(height, width)
+    wpos_ids = torch.arange(width, dtype=torch.long).unsqueeze(0).expand(height, width)
+    return torch.stack((hpos_ids, wpos_ids), dim=-1).reshape(height * width, 2)
+
+
+class Fgclip2VisionRotaryEmbedding(nn.Module):
+    def __init__(self, dim: int, base: float = 10000.0):
+        super().__init__()
+        if dim % 2 != 0:
+            raise ValueError(f"Vision rotary embedding dimension must be even, got {dim}.")
+        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
+
+    def forward(self, position_ids: torch.LongTensor) -> torch.Tensor:
+        if position_ids.dim() != 2 or position_ids.shape[-1] != 2:
+            raise ValueError(
+                "Fgclip2VisionRotaryEmbedding expects position_ids with shape [num_tokens, 2] "
+                f"but got {tuple(position_ids.shape)}."
+            )
+
+        return (position_ids.to(self.inv_freq.dtype).unsqueeze(-1) * self.inv_freq).flatten(1)
+
+
+def rotate_half_vision(x: torch.Tensor) -> torch.Tensor:
+    x1, x2 = x.chunk(2, dim=-1)
+    return torch.cat((-x2, x1), dim=-1)
+
+
+def apply_rotary_pos_emb_vision(
+    query_states: torch.Tensor,
+    key_states: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Apply rotary position embedding to vision attention queries and keys."""
+
+    orig_q_dtype = query_states.dtype
+    orig_k_dtype = key_states.dtype
+    query_states = query_states.float()
+    key_states = key_states.float()
+    cos = cos.float()
+    sin = sin.float()
+
+    if cos.dim() == 2:
+        cos = cos.unsqueeze(0).unsqueeze(1)
+        sin = sin.unsqueeze(0).unsqueeze(1)
+    elif cos.dim() == 3:
+        cos = cos.unsqueeze(1)
+        sin = sin.unsqueeze(1)
+
+    query_states = (query_states * cos) + (rotate_half_vision(query_states) * sin)
+    key_states = (key_states * cos) + (rotate_half_vision(key_states) * sin)
+    return query_states.to(orig_q_dtype), key_states.to(orig_k_dtype)
+
+
+def eager_attention_forward(
+    module: nn.Module,
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    attention_mask: Optional[torch.Tensor],
+    scaling: float,
+    dropout: float = 0.0,
+    **kwargs,
+):
+    attn_weights = torch.matmul(query, key.transpose(-1, -2)) * scaling
+    if attention_mask is not None:
+        attn_weights = attn_weights + attention_mask
+
+    attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query.dtype)
+    attn_weights = nn.functional.dropout(attn_weights, p=dropout, training=module.training)
+
+    attn_output = torch.matmul(attn_weights, value)
+    attn_output = attn_output.transpose(1, 2).contiguous()
+
+    return attn_output, attn_weights
+
+
+class Fgclip2Attention(nn.Module):
+    """Multi-headed attention from 'Attention Is All You Need' paper"""
+
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.embed_dim = config.hidden_size
+        self.num_heads = config.num_attention_heads
+        self.head_dim = self.embed_dim // self.num_heads
+        if self.head_dim * self.num_heads != self.embed_dim:
+            raise ValueError(
+                f"embed_dim must be divisible by num_heads (got `embed_dim`: {self.embed_dim} and `num_heads`:"
+                f" {self.num_heads})."
+            )
+        self.scale = self.head_dim**-0.5
+        self.dropout = config.attention_dropout
+        self.is_causal = False
+
+        self.k_proj = nn.Linear(self.embed_dim, self.embed_dim)
+        self.v_proj = nn.Linear(self.embed_dim, self.embed_dim)
+        self.q_proj = nn.Linear(self.embed_dim, self.embed_dim)
+        self.out_proj = nn.Linear(self.embed_dim, self.embed_dim)
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]] = None,
+        **kwargs,
+    ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
+        """Input shape: Batch x Time x Channel"""
+
+        batch_size, seq_length, embed_dim = hidden_states.shape
+
+        queries = self.q_proj(hidden_states)
+        keys = self.k_proj(hidden_states)
+        values = self.v_proj(hidden_states)
+
+        queries = queries.view(batch_size, seq_length, self.num_heads, self.head_dim).transpose(1, 2)
+        keys = keys.view(batch_size, seq_length, self.num_heads, self.head_dim).transpose(1, 2)
+        values = values.view(batch_size, seq_length, self.num_heads, self.head_dim).transpose(1, 2)
+
+        if position_embeddings is not None:
+            cos, sin = position_embeddings
+            queries, keys = apply_rotary_pos_emb_vision(queries, keys, cos, sin)
+
+        attention_interface: Callable = eager_attention_forward
+        if self.config._attn_implementation != "eager":
+            attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
+
+        attn_output, attn_weights = attention_interface(
+            self,
+            queries,
+            keys,
+            values,
+            attention_mask,
+            is_causal=self.is_causal,
+            scaling=self.scale,
+            dropout=0.0 if not self.training else self.dropout,
+        )
+
+        attn_output = attn_output.reshape(batch_size, seq_length, embed_dim).contiguous()
+        attn_output = self.out_proj(attn_output)
+
+        return attn_output, attn_weights
+
+
+class Fgclip2MLP(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.activation_fn = ACT2FN[config.hidden_act]
+        self.fc1 = nn.Linear(config.hidden_size, config.intermediate_size)
+        self.fc2 = nn.Linear(config.intermediate_size, config.hidden_size)
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        hidden_states = self.fc1(hidden_states)
+        hidden_states = self.activation_fn(hidden_states)
+        hidden_states = self.fc2(hidden_states)
+        return hidden_states
+
+
+class Fgclip2EncoderLayer(GradientCheckpointingLayer):
+    def __init__(self, config: Union[Fgclip2VisionConfig, Fgclip2TextConfig]):
+        super().__init__()
+        self.embed_dim = config.hidden_size
+        self.layer_norm1 = nn.LayerNorm(self.embed_dim, eps=config.layer_norm_eps)
+        self.self_attn = Fgclip2Attention(config)
+        self.layer_norm2 = nn.LayerNorm(self.embed_dim, eps=config.layer_norm_eps)
+        self.mlp = Fgclip2MLP(config)
+
+    @auto_docstring
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: torch.Tensor,
+        **kwargs: Unpack[TransformersKwargs],
+    ) -> torch.FloatTensor:
+        residual = hidden_states
+
+        hidden_states = self.layer_norm1(hidden_states)
+        hidden_states, _ = self.self_attn(
+            hidden_states=hidden_states,
+            attention_mask=attention_mask,
+            **kwargs,
+        )
+        hidden_states = residual + hidden_states
+
+        residual = hidden_states
+        hidden_states = self.layer_norm2(hidden_states)
+        hidden_states = self.mlp(hidden_states)
+        hidden_states = residual + hidden_states
+
+        return hidden_states
+
+
+class Fgclip2Encoder(nn.Module):
+    """
+    Transformer encoder consisting of `config.num_hidden_layers` self attention layers. Each layer is a
+    [`Fgclip2EncoderLayer`].
+
+    Args:
+        config: Fgclip2Config
+    """
+
+    def __init__(self, config: Fgclip2Config):
+        super().__init__()
+        self.config = config
+        self.layers = nn.ModuleList([Fgclip2EncoderLayer(config) for _ in range(config.num_hidden_layers)])
+        self.gradient_checkpointing = False
+
+    @auto_docstring
+    def forward(
+        self,
+        inputs_embeds,
+        attention_mask: Optional[torch.Tensor] = None,
+        **kwargs: Unpack[TransformersKwargs],
+    ) -> BaseModelOutput:
+        hidden_states = inputs_embeds
+        for encoder_layer in self.layers:
+            hidden_states = encoder_layer(
+                hidden_states,
+                attention_mask,
+                **kwargs,
+            )
+
+        return BaseModelOutput(last_hidden_state=hidden_states)
+
+
+class Fgclip2VisionTransformer(nn.Module):
+    def __init__(self, config: Fgclip2VisionConfig):
+        super().__init__()
+        self.config = config
+        embed_dim = config.hidden_size
+        self.head_dim = embed_dim // config.num_attention_heads
+        self.use_2d_rope = getattr(config, "vision_use_2d_rope", False)
+        if self.use_2d_rope and self.head_dim % 4 != 0:
+            raise ValueError(
+                "vision_use_2d_rope requires head_dim to be divisible by 4 so the Qwen3-VL-style "
+                "half-dimension rotary embedding can be duplicated back to the full head dimension."
+            )
+
+        self.embeddings = Fgclip2VisionEmbeddings(config)
+        self.rotary_pos_emb = Fgclip2VisionRotaryEmbedding(self.head_dim // 2) if self.use_2d_rope else None
+        self.encoder = Fgclip2Encoder(config)
+        self.post_layernorm = nn.LayerNorm(embed_dim, eps=config.layer_norm_eps)
+        self.use_head = True if not hasattr(config, "vision_use_head") else config.vision_use_head
+        if self.use_head:
+            self.head = Fgclip2MultiheadAttentionPoolingHead(config)
+
+    def _build_position_embeddings(
+        self,
+        spatial_shapes: torch.LongTensor,
+        seq_length: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> Optional[tuple[torch.Tensor, torch.Tensor]]:
+        cos_list = []
+        sin_list = []
+
+        if not self.use_2d_rope:
+            return None
+
+        for spatial_shape in spatial_shapes:
+            position_ids = build_vision_position_ids(spatial_shape).to(device)
+            rotary_pos_emb = self.rotary_pos_emb(position_ids)
+            emb = torch.cat((rotary_pos_emb, rotary_pos_emb), dim=-1)
+            cos = emb.cos().to(dtype)
+            sin = emb.sin().to(dtype)
+
+            if cos.shape[0] < seq_length:
+                pad_length = seq_length - cos.shape[0]
+                cos = torch.cat([cos, torch.ones((pad_length, cos.shape[-1]), device=device, dtype=dtype)], dim=0)
+                sin = torch.cat([sin, torch.zeros((pad_length, sin.shape[-1]), device=device, dtype=dtype)], dim=0)
+
+            cos_list.append(cos[:seq_length])
+            sin_list.append(sin[:seq_length])
+
+        cos = torch.stack(cos_list, dim=0)
+        sin = torch.stack(sin_list, dim=0)
+        return cos, sin
+
+    @can_return_tuple
+    @auto_docstring
+    def forward(
+        self,
+        pixel_values: torch.FloatTensor,
+        attention_mask: torch.Tensor,
+        spatial_shapes: torch.LongTensor,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+    ) -> BaseModelOutputWithPooling:
+        r"""
+        spatial_shapes (`torch.LongTensor` of shape `(batch_size, 2)`):
+            Tensor containing the spatial dimensions (height, width) of the input images.
+        """
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_hidden_states = (
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        )
+
+        hidden_states = self.embeddings(pixel_values, spatial_shapes)
+        position_embeddings = self._build_position_embeddings(
+            spatial_shapes=spatial_shapes,
+            seq_length=hidden_states.shape[1],
+            device=hidden_states.device,
+            dtype=hidden_states.dtype,
+        )
+
+        if attention_mask is not None and self.config._attn_implementation != "flash_attention_2":
+            encoder_attention_mask = _prepare_4d_attention_mask(attention_mask, hidden_states.dtype)
+        else:
+            encoder_attention_mask = attention_mask
+
+        encoder_outputs: BaseModelOutput = self.encoder(
+            inputs_embeds=hidden_states,
+            attention_mask=encoder_attention_mask,
+            position_embeddings=position_embeddings,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+        )
+
+        last_hidden_state = encoder_outputs.last_hidden_state
+        last_hidden_state = self.post_layernorm(last_hidden_state)
+
+        pooler_output = self.head(last_hidden_state, attention_mask) if self.use_head else None
+
+        return BaseModelOutputWithPooling(
+            last_hidden_state=last_hidden_state,
+            pooler_output=pooler_output,
+            hidden_states=encoder_outputs.hidden_states,
+            attentions=encoder_outputs.attentions,
+        )
 
 class Fgclip2PreTrainedModel(Siglip2PreTrainedModel):
     config: Fgclip2Config
