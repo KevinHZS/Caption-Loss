@@ -162,6 +162,8 @@ class Fgclip2VisionConfig(PretrainedConfig):
             The epsilon used by the layer normalization layers.
         attention_dropout (`float`, *optional*, defaults to 0.0):
             The dropout ratio for the attention probabilities.
+        vision_use_2d_rope (`bool`, *optional*, defaults to `False`):
+            Whether to apply a 2D rotary position embedding inside the vision attention layers.
 
     Example:
 
@@ -193,6 +195,7 @@ class Fgclip2VisionConfig(PretrainedConfig):
         hidden_act="gelu_pytorch_tanh",
         layer_norm_eps=1e-6,
         attention_dropout=0.0,
+        vision_use_2d_rope=False,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -207,6 +210,7 @@ class Fgclip2VisionConfig(PretrainedConfig):
         self.layer_norm_eps = layer_norm_eps
         self.hidden_act = hidden_act
         self.num_patches = num_patches
+        self.vision_use_2d_rope = vision_use_2d_rope
 
 
 class Fgclip2Config(PretrainedConfig):
